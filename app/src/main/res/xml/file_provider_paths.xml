@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Cache directory for overlay screenshot temp files -->
+    <cache-path
+        name="overlay_screenshots"
+        path="." />
+</paths>

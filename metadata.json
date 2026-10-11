@@ -1,0 +1,6 @@
+{
+  "name": "Khoj",
+  "description": "Khoj (খোঁজ) - AI Fact-Checking App. A bilingual (Bengali/English) fact-checking application that uses advanced AI search and grounding to analyze claims and provide verified truth ratings.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

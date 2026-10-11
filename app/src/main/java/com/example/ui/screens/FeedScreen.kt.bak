@@ -1,0 +1,1101 @@
+package com.example.ui.screens
+
+import androidx.compose.animation.core.*
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.composed
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
+import com.example.R
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.compose.AsyncImage
+import com.example.data.model.FeedItem
+import com.example.data.model.SupabaseComment
+import com.example.data.model.SupabaseReport
+import com.example.data.model.FactCheckReport
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import com.example.ui.components.MarkdownText
+import com.example.ui.theme.ColorFalse
+import com.example.ui.theme.ColorTrue
+import com.example.ui.theme.ColorUnverifiable
+import com.example.ui.theme.SlatePrimary
+import com.example.ui.viewmodel.FeedUiState
+import com.example.ui.viewmodel.FeedViewModel
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FeedScreen(
+    feedViewModel: FeedViewModel = viewModel(),
+    isBn: Boolean,
+    fontToUse: androidx.compose.ui.text.font.FontFamily = androidx.compose.ui.text.font.FontFamily.Default,
+    onSelectReport: (FactCheckReport) -> Unit,
+    onNavigateToNews: () -> Unit
+) {
+    val uiState by feedViewModel.uiState.collectAsStateWithLifecycle()
+    val comments by feedViewModel.comments.collectAsStateWithLifecycle()
+    val commentsLoading by feedViewModel.commentsLoading.collectAsStateWithLifecycle()
+    val isLoadingMore by feedViewModel.isLoadingMore.collectAsStateWithLifecycle()
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val pullToRefreshState = rememberPullToRefreshState()
+    val isRefreshing = uiState is FeedUiState.Loading && pullToRefreshState.isAnimating
+
+    LaunchedEffect(listState) {
+        androidx.compose.runtime.snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
+            .collect { lastIndex ->
+                if (lastIndex != null) {
+                    val totalItems = listState.layoutInfo.totalItemsCount
+                    // Trigger loadMore if we are within 3 items from the bottom
+                    if (totalItems > 0 && lastIndex >= totalItems - 3) {
+                        feedViewModel.loadMore()
+                    }
+                }
+            }
+    }
+
+    // Dynamically retrieve all available resources for each category
+    val trueResIds = remember(context) {
+        var i = 1
+        val list = mutableListOf<Int>()
+        while (true) {
+            val id = context.resources.getIdentifier("true_$i", "drawable", context.packageName)
+            if (id == 0) break
+            list.add(id)
+            i++
+        }
+        list
+    }
+
+    val falseResIds = remember(context) {
+        var i = 1
+        val list = mutableListOf<Int>()
+        while (true) {
+            val id = context.resources.getIdentifier("false_$i", "drawable", context.packageName)
+            if (id == 0) break
+            list.add(id)
+            i++
+        }
+        list
+    }
+
+    val unverifiableResIds = remember(context) {
+        var i = 1
+        val list = mutableListOf<Int>()
+        while (true) {
+            val id = context.resources.getIdentifier("unverifiable_$i", "drawable", context.packageName)
+            if (id == 0) break
+            list.add(id)
+            i++
+        }
+        list
+    }
+
+    // Map each report ID to a selected stable, non-repeating thumbnail resource ID
+    val reportThumbnails = remember(uiState, trueResIds, falseResIds, unverifiableResIds) {
+        if (uiState !is FeedUiState.Success) return@remember emptyMap<String, Int>()
+        val successState = uiState as FeedUiState.Success
+        val lastIndices = mutableMapOf<String, Int>() // category -> last used index
+
+        successState.items.filterIsInstance<FeedItem.ReportItem>().associate { item ->
+            val category = when (item.report.verdict.lowercase()) {
+                "true" -> "true"
+                "false" -> "false"
+                else -> "unverifiable"
+            }
+
+            val pool = when (category) {
+                "true" -> trueResIds
+                "false" -> falseResIds
+                else -> unverifiableResIds
+            }
+
+            val resId = if (pool.isEmpty()) {
+                0
+            } else {
+                val lastIdx = lastIndices[category] ?: -1
+                val nextIdx = if (lastIdx == -1 || pool.size <= 1) {
+                    (item.report.id.hashCode() and 0x7FFFFFFF) % pool.size
+                } else {
+                    val possibleIndices = (0 until pool.size).filter { it != lastIdx }
+                    val choice = (item.report.id.hashCode() and 0x7FFFFFFF) % possibleIndices.size
+                    possibleIndices[choice]
+                }
+                lastIndices[category] = nextIdx
+                pool[nextIdx]
+            }
+            item.report.id to resId
+        }
+    }
+
+    var selectedPostId by remember { mutableStateOf<String?>(null) }
+    var showCommentSheet by remember { mutableStateOf(false) }
+    var commentText by remember { mutableStateOf("") }
+    var replyToId by remember { mutableStateOf<String?>(null) }
+
+    if (showCommentSheet && selectedPostId != null) {
+        CommentBottomSheet(
+            postId = selectedPostId!!,
+            comments = comments,
+            isLoading = commentsLoading,
+            commentText = commentText,
+            onCommentChange = { commentText = it },
+            onSend = {
+                feedViewModel.postComment(selectedPostId!!, commentText, replyToId)
+                commentText = ""
+                replyToId = null
+            },
+            onReply = { replyToId = it },
+            onDismiss = {
+                showCommentSheet = false
+                selectedPostId = null
+                commentText = ""
+                replyToId = null
+            }
+        )
+    }
+
+    val searchQueryText by feedViewModel.searchQuery.collectAsStateWithLifecycle()
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+
+    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        when (val state = uiState) {
+            is FeedUiState.Loading -> {
+                LazyColumn(
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    // Scrollable search bar
+                    item(key = "search_bar") {
+                        OutlinedTextField(
+                            value = searchQueryText,
+                            onValueChange = { feedViewModel.setSearchQuery(it) },
+                            placeholder = {
+                                Text(
+                                    text = if (isBn) "à¦«à¦¿à¦¡ à¦à¦¨à§à¦¸à¦¨à§à¦§à¦¾à¦¨ à¦à¦°à§à¦¨..." else "Search feed...",
+                                    fontFamily = fontToUse,
+                                    fontSize = 14.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Search,
+                                    contentDescription = "Search",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                )
+                            },
+                            trailingIcon = {
+                                if (searchQueryText.isNotEmpty()) {
+                                    IconButton(onClick = { feedViewModel.setSearchQuery("") }) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Clear",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                        )
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(24.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9),
+                                unfocusedContainerColor = if (isDark) Color(0xFF0F172A) else Color(0xFFF8FAFC),
+                                focusedBorderColor = SlatePrimary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+                                cursorColor = SlatePrimary
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp)
+                        )
+                    }
+                    items(3) { FeedSkeletonItem(isDark = isDark) }
+                }
+            }
+            is FeedUiState.Error -> {
+                // Still show search bar above error
+                Column(modifier = Modifier.fillMaxSize()) {
+                    OutlinedTextField(
+                        value = searchQueryText,
+                        onValueChange = { feedViewModel.setSearchQuery(it) },
+                        placeholder = {
+                            Text(
+                                text = if (isBn) "à¦«à¦¿à¦¡ à¦à¦¨à§à¦¸à¦¨à§à¦§à¦¾à¦¨ à¦à¦°à§à¦¨..." else "Search feed...",
+                                fontFamily = fontToUse,
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Search,
+                                contentDescription = "Search",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(24.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9),
+                            unfocusedContainerColor = if (isDark) Color(0xFF0F172A) else Color(0xFFF8FAFC),
+                            focusedBorderColor = SlatePrimary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+                            cursorColor = SlatePrimary
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    )
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.WifiOff, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(48.dp))
+                            Spacer(Modifier.height(12.dp))
+                            Text("Failed to load feed", fontFamily = fontToUse, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(8.dp))
+                            Button(onClick = { feedViewModel.loadFeed() }) { Text("Retry", fontFamily = fontToUse) }
+                        }
+                    }
+                }
+            }
+            is FeedUiState.Success -> {
+                if (state.items.isEmpty()) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        OutlinedTextField(
+                            value = searchQueryText,
+                            onValueChange = { feedViewModel.setSearchQuery(it) },
+                            placeholder = {
+                                Text(
+                                    text = if (isBn) "à¦«à¦¿à¦¡ à¦à¦¨à§à¦¸à¦¨à§à¦§à¦¾à¦¨ à¦à¦°à§à¦¨..." else "Search feed...",
+                                    fontFamily = fontToUse,
+                                    fontSize = 14.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Search,
+                                    contentDescription = "Search",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                )
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(24.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9),
+                                unfocusedContainerColor = if (isDark) Color(0xFF0F172A) else Color(0xFFF8FAFC),
+                                focusedBorderColor = SlatePrimary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+                                cursorColor = SlatePrimary
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp)
+                        )
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Default.List, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(48.dp))
+                                Spacer(Modifier.height(12.dp))
+                                Text("No posts yet. Be the first to fact-check!", fontFamily = fontToUse, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                } else {
+                    PullToRefreshBox(
+                        isRefreshing = isRefreshing,
+                        onRefresh = { feedViewModel.loadFeed() }, // loadFeed resets the query and cursors
+                        state = pullToRefreshState,
+                        modifier = Modifier.fillMaxSize(),
+                        indicator = {
+                            PullToRefreshDefaults.Indicator(
+                                state = pullToRefreshState,
+                                isRefreshing = isRefreshing,
+                                modifier = Modifier.align(Alignment.TopCenter),
+                                color = SlatePrimary
+                            )
+                        }
+                    ) {
+                        LazyColumn(
+                            state = listState,
+                            contentPadding = PaddingValues(vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            // Search bar as first scrollable item
+                            item(key = "search_bar") {
+                                OutlinedTextField(
+                                    value = searchQueryText,
+                                    onValueChange = { feedViewModel.setSearchQuery(it) },
+                                    placeholder = {
+                                        Text(
+                                            text = if (isBn) "à¦«à¦¿à¦¡ à¦à¦¨à§à¦¸à¦¨à§à¦§à¦¾à¦¨ à¦à¦°à§à¦¨..." else "Search feed...",
+                                            fontFamily = fontToUse,
+                                            fontSize = 14.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Default.Search,
+                                            contentDescription = "Search",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                        )
+                                    },
+                                    trailingIcon = {
+                                        if (searchQueryText.isNotEmpty()) {
+                                            IconButton(onClick = { feedViewModel.setSearchQuery("") }) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Clear",
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                                )
+                                            }
+                                        }
+                                    },
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(24.dp),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedContainerColor = if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9),
+                                        unfocusedContainerColor = if (isDark) Color(0xFF0F172A) else Color(0xFFF8FAFC),
+                                        focusedBorderColor = SlatePrimary,
+                                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+                                        cursorColor = SlatePrimary
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                                )
+                            }
+                            items(state.items, key = { item ->
+                                when (item) {
+                                    is FeedItem.ReportItem -> "r_${item.report.id}"
+                                    is FeedItem.ArticleItem -> "a_${item.article.slug}"
+                                    is FeedItem.NewsItem -> "n_${item.news.link}"
+                                    is FeedItem.MoreNewsButtonItem -> "btn_more_news"
+                                }
+                            }) { item ->
+                                when (item) {
+                                    is FeedItem.ReportItem -> ReportFeedCard(
+                                        item = item,
+                                        isBn = isBn,
+                                        fontToUse = fontToUse,
+                                        thumbnailResId = reportThumbnails[item.report.id] ?: 0,
+                                        onLike = { feedViewModel.toggleLike(item.report.id) },
+                                        onComment = {
+                                            selectedPostId = item.report.id
+                                            feedViewModel.loadComments(item.report.id)
+                                            showCommentSheet = true
+                                        },
+                                        onSelectReport = onSelectReport
+                                    )
+                                    is FeedItem.ArticleItem -> ArticleFeedCard(
+                                        item = item,
+                                        fontToUse = fontToUse,
+                                        onLike = { feedViewModel.toggleLike(item.article.slug) },
+                                        onComment = {
+                                            selectedPostId = item.article.slug
+                                            feedViewModel.loadComments(item.article.slug)
+                                            showCommentSheet = true
+                                        }
+                                    )
+                                    is FeedItem.NewsItem -> NewsArticleCard(
+                                        article = item.news,
+                                        isBn = isBn,
+                                        fontToUse = fontToUse,
+                                        isDark = isDark
+                                    )
+                                    is FeedItem.MoreNewsButtonItem -> MoreNewsButtonCard(
+                                        isBn = isBn,
+                                        fontToUse = fontToUse,
+                                        onClick = onNavigateToNews
+                                    )
+                                }
+                            }
+                            
+                            if (isLoadingMore) {
+                                item(key = "loading_more_spinner") {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(32.dp),
+                                            color = SlatePrimary,
+                                            strokeWidth = 3.dp
+                                        )
+                                    }
+                                }
+                            } else if (!state.hasMore) {
+                                item(key = "end_of_feed") {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(24.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = if (isBn) "à¦à¦ªà¦¨à¦¿ à¦«à¦¿à¦¡à§à¦° à¦¶à§à¦·à§ à¦ªà§à¦à¦à§à¦à§à¦¨" else "You've reached the end of the feed",
+                                            fontFamily = fontToUse,
+                                            fontSize = 13.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                            
+                            item { Spacer(Modifier.height(80.dp)) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ââ Report Feed Card ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+
+@Composable
+fun ReportFeedCard(
+    item: FeedItem.ReportItem,
+    isBn: Boolean,
+    fontToUse: androidx.compose.ui.text.font.FontFamily = androidx.compose.ui.text.font.FontFamily.Default,
+    thumbnailResId: Int,
+    onLike: () -> Unit,
+    onComment: () -> Unit,
+    onSelectReport: (FactCheckReport) -> Unit
+) {
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isDark) Color(0xFF0D0D0D) else Color.White
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isDark) 0.dp else 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // Author row
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Image(
+                    painter = painterResource(R.drawable.khoj_ai_bot),
+                    contentDescription = null,
+                    modifier = Modifier.size(36.dp).clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = if (isBn) "à¦à§à¦à¦ à¦à¦à¦" else "Khoj AI",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Box(
+                        modifier = Modifier
+                            .background(Color(0xFF0284C7).copy(alpha = 0.1f), RoundedCornerShape(4.dp))
+                            .border(BorderStroke(0.5.dp, Color(0xFF0284C7).copy(alpha = 0.4f)), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = if (isBn) "à¦¬à§à¦¯à¦¬à¦¹à¦¾à¦°à¦à¦¾à¦°à§à¦¦à§à¦° à¦¯à¦¾à¦à¦¾à¦à¦à§à¦¤" else "Factchecked by the Users",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0284C7)
+                        )
+                    }
+                    Text(
+                        text = formatRelativeTime(item.report.createdAt),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                VerdictBadge(verdict = item.report.verdict)
+            }
+
+            // Claim text
+            Text(
+                text = item.report.originalQuery,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+
+            // Report Preview (Markdown rendered)
+            val content = item.report.reportContent
+            if (!content.isNullOrBlank()) {
+                val previewText = remember(content) {
+                    if (content.length > 150) {
+                        content.take(150) + "..."
+                    } else {
+                        content
+                    }
+                }
+                
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    MarkdownText(
+                        text = previewText,
+                        fontToUse = fontToUse,
+                        textColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+                        fontSize = 13,
+                        lineHeight = 20
+                    )
+                    
+                    Text(
+                        text = if (item.report.language == "bn") "à¦à¦°à¦ à¦ªà¦¡à¦¼à§à¦¨" else "Read More",
+                        fontFamily = fontToUse,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = SlatePrimary,
+                        modifier = Modifier
+                            .clickable {
+                                onSelectReport(item.report.toFactCheckReport())
+                            }
+                            .padding(vertical = 2.dp)
+                    )
+                }
+            }
+
+            // Thumbnail banner
+            if (thumbnailResId != 0) {
+                Image(
+                    painter = painterResource(id = thumbnailResId),
+                    contentDescription = "Report Thumbnail",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(16f / 9f)
+                        .clip(RoundedCornerShape(12.dp))
+                )
+            }
+
+            // Confidence bar
+            if (item.report.confidenceScore > 0) {
+                val color = verdictColor(item.report.verdict)
+                LinearProgressIndicator(
+                    progress = { item.report.confidenceScore.toFloat() },
+                    modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)),
+                    color = color,
+                    trackColor = color.copy(alpha = 0.15f)
+                )
+                Text(
+                    text = "${(item.report.confidenceScore * 100).toInt()}% confidence",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // Action row
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                LikeButton(isLiked = item.isLikedByMe, count = item.likeCount, onClick = onLike)
+                Spacer(Modifier.width(4.dp))
+                CommentButton(count = item.commentCount, onClick = onComment)
+            }
+        }
+    }
+}
+
+// ââ Article Feed Card âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+
+@Composable
+fun ArticleFeedCard(
+    item: FeedItem.ArticleItem,
+    fontToUse: androidx.compose.ui.text.font.FontFamily = androidx.compose.ui.text.font.FontFamily.Default,
+    onLike: () -> Unit,
+    onComment: () -> Unit
+) {
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isDark) Color(0xFF0A0F1A) else Color(0xFFF0F7FF)
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isDark) 0.dp else 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // Thumbnail
+            if (!item.article.thumbnailUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = item.article.thumbnailUrl,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxWidth().height(160.dp).clip(RoundedCornerShape(12.dp)),
+                    contentScale = ContentScale.Crop
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                SuggestionChip(
+                    onClick = {},
+                    label = { Text(item.article.type.replaceFirstChar { it.uppercase() }, fontSize = 11.sp) }
+                )
+                item.article.verdict?.let { VerdictBadge(verdict = it) }
+            }
+            Text(
+                text = item.article.title,
+                fontFamily = fontToUse,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            item.article.excerpt?.let {
+                Text(text = it, fontFamily = fontToUse, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text(
+                text = "By ${item.article.author} Â· ${formatRelativeTime(item.article.publishedAt)}",
+                fontFamily = fontToUse,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                LikeButton(isLiked = item.isLikedByMe, count = item.likeCount, onClick = onLike)
+                Spacer(Modifier.width(4.dp))
+                CommentButton(count = item.commentCount, onClick = onComment)
+            }
+        }
+    }
+}
+
+// ââ Shared Components âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+
+@Composable
+fun LikeButton(isLiked: Boolean, count: Int, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.clickable { onClick() }.padding(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Icon(
+            if (isLiked) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
+            contentDescription = "Like",
+            tint = if (isLiked) Color(0xFFE11D48) else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
+        Text(count.toString(), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+fun CommentButton(count: Int, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.clickable { onClick() }.padding(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Icon(Icons.Default.ChatBubbleOutline, contentDescription = "Comment", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        Text(count.toString(), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+fun VerdictBadge(verdict: String) {
+    val (label, bg, fg) = when (verdict.lowercase()) {
+        "true" -> Triple("â TRUE", ColorTrue.copy(alpha = 0.15f), ColorTrue)
+        "false" -> Triple("â FALSE", ColorFalse.copy(alpha = 0.15f), ColorFalse)
+        "misleading" -> Triple("â  MISLEADING", ColorUnverifiable.copy(alpha = 0.15f), ColorUnverifiable)
+        "context_dependent" -> Triple("~ CONTEXT", Color(0xFF6366F1).copy(alpha = 0.15f), Color(0xFF6366F1))
+        else -> Triple("? UNVERIFIED", MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    Box(
+        modifier = Modifier
+            .background(bg, RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+    ) {
+        Text(label, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = fg)
+    }
+}
+
+// ââ Comment Bottom Sheet ââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CommentBottomSheet(
+    postId: String,
+    comments: List<SupabaseComment>,
+    isLoading: Boolean,
+    commentText: String,
+    onCommentChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onReply: (String?) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+            Text(
+                "Comments (${comments.size})",
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+            )
+            HorizontalDivider()
+            if (isLoading) {
+                Box(Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                }
+            } else if (comments.isEmpty()) {
+                Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) {
+                    Text("No comments yet. Be the first!", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                LazyColumn(modifier = Modifier.heightIn(max = 340.dp)) {
+                    items(comments) { comment ->
+                        CommentItem(comment = comment, onReply = { onReply(comment.id) })
+                    }
+                }
+            }
+            HorizontalDivider()
+            // Input
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = commentText,
+                    onValueChange = onCommentChange,
+                    placeholder = { Text("Write a comment...", fontSize = 14.sp) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(24.dp),
+                    singleLine = true
+                )
+                IconButton(
+                    onClick = onSend,
+                    enabled = commentText.isNotBlank()
+                ) {
+                    Icon(Icons.Default.Send, contentDescription = "Send", tint = SlatePrimary)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CommentItem(comment: SupabaseComment, onReply: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                start = (16 + comment.depth * 20).dp,
+                end = 16.dp,
+                top = 10.dp,
+                bottom = 2.dp
+            ),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Box(
+            modifier = Modifier.size(32.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(18.dp))
+        }
+        Column {
+            Text(comment.userId?.take(8) ?: "User", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            Text(comment.commentText, fontSize = 14.sp)
+            Row {
+                TextButton(onClick = onReply, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)) {
+                    Text("Reply", fontSize = 12.sp, color = SlatePrimary)
+                }
+                Text(
+                    formatRelativeTime(comment.createdAt),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.CenterVertically)
+                )
+            }
+        }
+    }
+}
+
+// ââ Helpers âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+
+fun verdictColor(verdict: String): Color = when (verdict.lowercase()) {
+    "true" -> ColorTrue
+    "false" -> ColorFalse
+    "misleading" -> ColorUnverifiable
+    else -> Color(0xFF94A3B8)
+}
+
+fun formatRelativeTime(isoString: String): String {
+    return try {
+        val cleanString = isoString.replace("Z", "+0000")
+        val formatPattern = if (cleanString.contains(".")) "yyyy-MM-dd'T'HH:mm:ss.SSSZ" else "yyyy-MM-dd'T'HH:mm:ssZ"
+        val sdf = java.text.SimpleDateFormat(formatPattern, java.util.Locale.US)
+        val date = sdf.parse(cleanString)
+        if (date != null) {
+            val diffMs = System.currentTimeMillis() - date.time
+            val diffSeconds = diffMs / 1000
+            when {
+                diffSeconds < 60 -> "just now"
+                diffSeconds < 3600 -> "${diffSeconds / 60}m ago"
+                diffSeconds < 86400 -> "${diffSeconds / 3600}h ago"
+                diffSeconds < 604800 -> "${diffSeconds / 86400}d ago"
+                else -> {
+                    val outputSdf = java.text.SimpleDateFormat("MMM d", java.util.Locale.US)
+                    outputSdf.format(date)
+                }
+            }
+        } else {
+            isoString.take(10)
+        }
+    } catch (e: Throwable) { isoString.take(10) }
+}
+
+private fun Modifier.shimmerEffect(): Modifier = composed {
+    val transition = rememberInfiniteTransition(label = "shimmer")
+    val translateAnim = transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1000f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "shimmer"
+    )
+
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val shimmerColors = if (isDark) {
+        listOf(
+            Color(0xFF1E293B),
+            Color(0xFF334155),
+            Color(0xFF1E293B)
+        )
+    } else {
+        listOf(
+            Color(0xFFE2E8F0),
+            Color(0xFFF1F5F9),
+            Color(0xFFE2E8F0)
+        )
+    }
+
+    val brush = Brush.linearGradient(
+        colors = shimmerColors,
+        start = Offset(x = translateAnim.value - 300f, y = translateAnim.value - 300f),
+        end = Offset(x = translateAnim.value, y = translateAnim.value)
+    )
+
+    background(brush)
+}
+
+@Composable
+fun FeedSkeletonItem(isDark: Boolean) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isDark) Color(0xFF0D0D0D) else Color.White
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isDark) 0.dp else 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            // Author row skeleton
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .shimmerEffect()
+                )
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .width(120.dp)
+                            .height(14.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .shimmerEffect()
+                    )
+                    Box(
+                        modifier = Modifier
+                            .width(80.dp)
+                            .height(10.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .shimmerEffect()
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .width(60.dp)
+                        .height(20.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .shimmerEffect()
+                )
+            }
+
+            // Claim text skeleton
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .height(16.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .shimmerEffect()
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.7f)
+                        .height(16.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .shimmerEffect()
+                )
+            }
+
+            // Progress bar skeleton
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .shimmerEffect()
+            )
+
+            Spacer(Modifier.height(4.dp))
+
+            // Action row skeleton
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f))
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .width(70.dp)
+                        .height(24.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .shimmerEffect()
+                )
+                Box(
+                    modifier = Modifier
+                        .width(70.dp)
+                        .height(24.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .shimmerEffect()
+                )
+            }
+        }
+    }
+}
+
+private fun SupabaseReport.toFactCheckReport(): FactCheckReport {
+    val sourcesArr = org.json.JSONArray()
+    this.sources?.forEach { element ->
+        try {
+            val obj = element.jsonObject
+            val url = obj["url"]?.jsonPrimitive?.contentOrNull ?: ""
+            val title = obj["title"]?.jsonPrimitive?.contentOrNull ?: ""
+            val snippet = obj["snippet"]?.jsonPrimitive?.contentOrNull ?: ""
+            val score = obj["credibilityScore"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull()
+            val tier = if (score != null) {
+                if (score >= 0.8) 1 else if (score >= 0.6) 2 else 3
+            } else {
+                obj["tier"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 3
+            }
+            sourcesArr.put(org.json.JSONObject().apply {
+                put("title", title)
+                put("url", url)
+                put("snippet", snippet)
+                put("domain", try { java.net.URI(url).host ?: "" } catch(e: Exception) { "" })
+                put("credibilityTier", tier)
+                put("publishDate", "")
+            })
+        } catch (e: Exception) {
+            // ignore malformed elements
+        }
+    }
+    return FactCheckReport(
+        id = this.id,
+        claimText = this.processedQuery ?: this.originalQuery,
+        normalizedClaim = this.processedQuery ?: this.originalQuery,
+        verdict = this.verdict,
+        confidence = (this.confidenceScore * 100).toInt(),
+        summaryBn = this.reportContent ?: "",
+        summaryEn = this.reportContent ?: "",
+        reasoningBn = this.reportContent ?: "",
+        reasoningEn = this.reportContent ?: "",
+        sourcesJson = sourcesArr.toString(),
+        contradictingSourcesJson = "[]",
+        isPublic = this.isPublic ?: true,
+        userId = this.userId,
+        timestamp = try {
+            if (this.createdAt.isNotEmpty()) {
+                val cleanString = this.createdAt.replace("Z", "+0000")
+                val formatPattern = if (cleanString.contains(".")) "yyyy-MM-dd'T'HH:mm:ss.SSSZ" else "yyyy-MM-dd'T'HH:mm:ssZ"
+                val sdf = java.text.SimpleDateFormat(formatPattern, java.util.Locale.US)
+                sdf.parse(cleanString)?.time ?: System.currentTimeMillis()
+            } else {
+                System.currentTimeMillis()
+            }
+        } catch (e: Exception) {
+            System.currentTimeMillis()
+        }
+    )
+}
+
+
+@Composable
+fun MoreNewsButtonCard(isBn: Boolean, fontToUse: androidx.compose.ui.text.font.FontFamily, onClick: () -> Unit) {
+    androidx.compose.material3.Card(
+        onClick = onClick,
+        modifier = androidx.compose.ui.Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = com.example.ui.theme.SlatePrimary,
+            contentColor = androidx.compose.ui.graphics.Color.White
+        ),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+    ) {
+        androidx.compose.foundation.layout.Row(
+            modifier = androidx.compose.ui.Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center
+        ) {
+            androidx.compose.material3.Text(
+                text = if (isBn) "আরও খবর" else "More News",
+                fontFamily = fontToUse,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                fontSize = 16.sp
+            )
+            androidx.compose.foundation.layout.Spacer(Modifier.width(8.dp))
+            androidx.compose.material3.Icon(
+                imageVector = androidx.compose.material.icons.Icons.Default.ArrowForward,
+                contentDescription = null
+            )
+        }
+    }
+}
+

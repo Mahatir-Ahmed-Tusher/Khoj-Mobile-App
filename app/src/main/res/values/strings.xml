@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">Khoj</string>
+    <string name="default_web_client_id">109272164782-j8frlqql7e2fo32ghc7cd1kdk0adghqf.apps.googleusercontent.com</string>
+    
+    <!-- Search Widget Strings -->
+    <string name="widget_search_hint">Search or verify claim…</string>
+    <string name="widget_mode_factcheck">Fact Check</string>
+    <string name="widget_mode_websearch">Web Search</string>
+    <string name="widget_mode_deepsearch">Deep Search</string>
+    <string name="widget_action_voice">Voice search</string>
+    <string name="widget_action_image">Image search</string>
+
+    <!-- Overlay "View on Other Apps" feature -->
+    <!-- This text appears in the system text-selection toolbar across all apps -->
+    <string name="action_fact_check">Fact Check</string>
+</resources>

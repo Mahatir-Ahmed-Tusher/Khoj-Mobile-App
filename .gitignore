@@ -1,0 +1,76 @@
+# ==============================================================================
+# Khoj Android & Web App Git Ignore Config
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Android & Gradle (General)
+# ------------------------------------------------------------------------------
+.gradle/
+.kotlin/
+build/
+app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.ap_
+*.aab
+*.keystore
+!debug.keystore
+
+# Local developer configuration files
+local.properties
+.env
+.env*.local
+
+# ------------------------------------------------------------------------------
+# Web App & Node.js (Khoj-web-app)
+# ------------------------------------------------------------------------------
+# Dependencies
+node_modules/
+Khoj-web-app/node_modules/
+
+# Next.js build output
+.next/
+Khoj-web-app/.next/
+out/
+Khoj-web-app/out/
+
+# Production/Distribution outputs
+dist/
+Khoj-web-app/dist/
+
+# Log files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment files
+Khoj-web-app/.env
+Khoj-web-app/.env.local
+Khoj-web-app/.env.development.local
+Khoj-web-app/.env.test.local
+Khoj-web-app/.env.production.local
+
+# Cache and temporary directories
+.cache/
+.parcel-cache/
+.eslintcache
+
+# ------------------------------------------------------------------------------
+# IDEs & Editor Configuration (Android Studio, VS Code, JetBrains)
+# ------------------------------------------------------------------------------
+*.iml
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS-specific files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">খোঁজ</string>
+    
+    <!-- Search Widget Strings in Bengali -->
+    <string name="widget_search_hint">সার্চ বা তথ্য যাচাই করুন…</string>
+    <string name="widget_mode_factcheck">ফ্যাক্ট-চেক</string>
+    <string name="widget_mode_websearch">ওয়েব</string>
+    <string name="widget_mode_deepsearch">রিসার্চ</string>
+    <string name="widget_action_voice">ভয়েস সার্চ</string>
+    <string name="widget_action_image">ইমেজ সার্চ</string>
+</resources>

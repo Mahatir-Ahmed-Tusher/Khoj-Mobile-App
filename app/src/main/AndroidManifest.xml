@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- ── "View on Other Apps" overlay feature permissions ─────────────── -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+
+    <application
+        android:name=".KhojApplication"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MyApplication">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.MyApplication"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Required for CanHub Image Cropper to avoid crash on non-AppCompat base themes -->
+        <activity
+            android:name="com.canhub.cropper.CropImageActivity"
+            android:theme="@style/Theme.AppCompat"
+            android:exported="true" />
+
+        <!-- ── "View on Other Apps" overlay service ──────────────────────── -->
+        <!--
+            foregroundServiceType="specialUse|microphone|mediaProjection"
+            The service uses specialUse at rest (overlay window), and transitions to
+            microphone or mediaProjection types only when the user explicitly invokes
+            those sub-features via the FAB menu.
+        -->
+        <service
+            android:name=".overlay.OverlayModeService"
+            android:foregroundServiceType="specialUse|microphone|mediaProjection"
+            android:exported="false">
+            <!-- Required for FOREGROUND_SERVICE_TYPE_SPECIAL_USE on Android 14+ -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="overlay_fact_check_assistant" />
+        </service>
+
+        <!--
+            ProcessTextActivity: appears as "Fact Check" in the system floating text
+            selection toolbar when text is selected in any app.
+            No special permissions required — this is the standard Android text processing API.
+        -->
+        <activity
+            android:name=".overlay.ProcessTextActivity"
+            android:label="@string/action_fact_check"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:taskAffinity=""
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            MediaProjectionConsentActivity: shows the system screen-capture consent dialog.
+            Must be a fully transparent activity — never visible to the user.
+        -->
+        <activity
+            android:name=".overlay.MediaProjectionConsentActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
+
+        <!--
+            RegionSelectorActivity: full-screen screenshot region selection UI.
+            No system chrome, dark overlay, Canvas drag-to-select.
+        -->
+        <activity
+            android:name=".overlay.RegionSelectorActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+            android:excludeFromRecents="true" />
+
+        <!-- FileProvider for sharing bitmap files between service and activities -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_provider_paths" />
+        </provider>
+
+        <receiver
+            android:name=".widget.KhojSearchWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_search_bar_info" />
+        </receiver>
+    </application>
+
+</manifest>
+

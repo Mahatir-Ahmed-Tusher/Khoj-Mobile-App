@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_widget_container"
+    android:orientation="vertical"
+    android:padding="8dp">
+
+    <!-- Top Search Input Bar (Pill) -->
+    <LinearLayout
+        android:id="@+id/widget_search_box"
+        android:layout_width="match_parent"
+        android:layout_height="46dp"
+        android:background="@drawable/bg_widget_search_field"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="12dp"
+        android:paddingEnd="6dp"
+        android:contentDescription="@string/widget_search_hint">
+
+        <!-- Search / Brand Icon -->
+        <ImageView
+            android:id="@+id/widget_icon_search"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:src="@drawable/ic_widget_search"
+            android:contentDescription="@null" />
+
+        <!-- Search Placeholder Text -->
+        <TextView
+            android:id="@+id/widget_search_text"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_marginEnd="6dp"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="@string/widget_search_hint"
+            android:textColor="#94A3B8"
+            android:textSize="13sp" />
+
+        <!-- Voice Search Quick Action -->
+        <ImageView
+            android:id="@+id/widget_btn_voice"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:padding="7dp"
+            android:src="@drawable/ic_widget_mic"
+            android:contentDescription="@string/widget_action_voice" />
+
+        <!-- Image Search Quick Action -->
+        <ImageView
+            android:id="@+id/widget_btn_camera"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:padding="7dp"
+            android:src="@drawable/ic_widget_camera"
+            android:contentDescription="@string/widget_action_image" />
+
+    </LinearLayout>
+
+    <!-- Bottom Mode Selection Chips -->
+    <LinearLayout
+        android:id="@+id/widget_modes_container"
+        android:layout_width="match_parent"
+        android:layout_height="34dp"
+        android:layout_marginTop="6dp"
+        android:orientation="horizontal"
+        android:baselineAligned="false">
+
+        <!-- Mode: Fact Check -->
+        <LinearLayout
+            android:id="@+id/widget_chip_factcheck"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginEnd="3dp"
+            android:background="@drawable/bg_widget_chip"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:paddingHorizontal="4dp"
+            android:contentDescription="@string/widget_mode_factcheck">
+
+            <ImageView
+                android:layout_width="14dp"
+                android:layout_height="14dp"
+                android:layout_marginEnd="4dp"
+                android:src="@drawable/ic_widget_shield"
+                android:contentDescription="@null" />
+
+            <TextView
+                android:id="@+id/widget_label_factcheck"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/widget_mode_factcheck"
+                android:textColor="#E2E8F0"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <!-- Mode: Web Search -->
+        <LinearLayout
+            android:id="@+id/widget_chip_websearch"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:background="@drawable/bg_widget_chip"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:paddingHorizontal="4dp"
+            android:contentDescription="@string/widget_mode_websearch">
+
+            <ImageView
+                android:layout_width="14dp"
+                android:layout_height="14dp"
+                android:layout_marginEnd="4dp"
+                android:src="@drawable/ic_widget_globe"
+                android:contentDescription="@null" />
+
+            <TextView
+                android:id="@+id/widget_label_websearch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/widget_mode_websearch"
+                android:textColor="#E2E8F0"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <!-- Mode: Deep Search (রিসার্চ) -->
+        <LinearLayout
+            android:id="@+id/widget_chip_deepsearch"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginStart="3dp"
+            android:background="@drawable/bg_widget_chip"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:paddingHorizontal="4dp"
+            android:contentDescription="@string/widget_mode_deepsearch">
+
+            <ImageView
+                android:layout_width="14dp"
+                android:layout_height="14dp"
+                android:layout_marginEnd="4dp"
+                android:src="@drawable/ic_widget_bolt"
+                android:contentDescription="@null" />
+
+            <TextView
+                android:id="@+id/widget_label_deepsearch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/widget_mode_deepsearch"
+                android:textColor="#E2E8F0"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+    </LinearLayout>
+
+</LinearLayout>

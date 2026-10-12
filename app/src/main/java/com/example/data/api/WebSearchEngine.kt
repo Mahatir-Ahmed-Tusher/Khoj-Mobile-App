@@ -128,11 +128,53 @@ class WebSearchEngine {
         }
     }
 
+    suspend fun searchTinyFish(workerUrl: String, query: String, maxResults: Int = 20): List<WebSearchResult> = withContext(Dispatchers.IO) {
+        val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+        val url = "$workerUrl/tinyfish/search?q=$encodedQuery&max_results=$maxResults"
+        val request = Request.Builder()
+            .url(url)
+            .get()
+            .build()
+
+        try {
+            httpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext emptyList()
+                val body = response.body?.string() ?: return@withContext emptyList()
+                val root = JSONObject(body)
+                val resultsArr = root.optJSONArray("results") ?: return@withContext emptyList()
+                val sources = mutableListOf<WebSearchResult>()
+                for (i in 0 until resultsArr.length()) {
+                    val item = resultsArr.optJSONObject(i) ?: continue
+                    val itemUrl = item.optString("url", "")
+                    val title = item.optString("title", "TinyFish Result")
+                    val snippet = item.optString("snippet", item.optString("content", ""))
+                    val engine = item.optString("engine", "tinyfish")
+                    if (itemUrl.isNotBlank() && snippet.isNotBlank()) {
+                        sources.add(
+                            WebSearchResult(
+                                title = title,
+                                url = itemUrl,
+                                snippet = snippet,
+                                engine = engine,
+                                imageUrl = null,
+                                source = "TinyFish Search"
+                            )
+                        )
+                    }
+                }
+                sources
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "searchTinyFish failed: ${e.message}")
+            emptyList()
+        }
+    }
+
     /**
      * Web Search Fallback Chain:
      * 1. Primary: /degoog (Google Organic)
      * 2. Fallback 1: SearXNG Cluster
-     * 3. Fallback 2: /search (Multi-provider Search API)
+     * 3. Fallback 2: /tinyfish/search (TinyFish Dedicated 21-Key Rotation)
      */
     suspend fun searchWithFallback(context: Context?, query: String, category: String, page: Int = 1): List<WebSearchResult> = withContext(Dispatchers.IO) {
         val isGeneral = category.isBlank() || category.equals("general", ignoreCase = true)
@@ -164,14 +206,14 @@ class WebSearchEngine {
             Log.w(tag, "Fallback 1 SearXNG failed: ${e.message}")
         }
 
-        // 3. Fallback 2: /search
+        // 3. Fallback 2: /tinyfish/search
         try {
-            val workerResults = searchKhojWorker(workerUrl, query, 20)
-            if (workerResults.isNotEmpty()) {
-                return@withContext workerResults
+            val tinyfishResults = searchTinyFish(workerUrl, query, 20)
+            if (tinyfishResults.isNotEmpty()) {
+                return@withContext tinyfishResults
             }
         } catch (e: Exception) {
-            Log.w(tag, "Fallback 2 /search failed: ${e.message}")
+            Log.w(tag, "Fallback 2 /tinyfish/search failed: ${e.message}")
         }
 
         emptyList()

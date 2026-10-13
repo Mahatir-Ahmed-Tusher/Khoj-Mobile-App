@@ -270,4 +270,109 @@ class QueryPlanningOrchestrator(
         }
     }
 
+    suspend fun routeSearchIntent(
+        query: String,
+        recentHistoryContext: String = "",
+        isFactCheckMode: Boolean = false
+    ): SearchRoutingDecision = withContext(Dispatchers.IO) {
+        val clean = query.trim()
+        if (clean.isBlank()) {
+            return@withContext SearchRoutingDecision(needsSearch = false, searchQuery = "")
+        }
+
+        if (circuitBreaker.isOpen()) {
+            PipelineTelemetry.warn(pipelineType, PipelineStage.PLANNER, "Circuit breaker OPEN for routing. Falling back to default decision.")
+            val needs = isFactCheckMode || clean.length > 25
+            return@withContext SearchRoutingDecision(needsSearch = needs, searchQuery = if (needs) clean else "")
+        }
+
+        try {
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            val currentDate = sdf.format(java.util.Date())
+
+            val systemPrompt = """
+                You are the Search Decision & Query Reformulation Router for 'Khoj AI' (Bangladesh).
+                Analyze the user message and conversation context. Output valid JSON ONLY.
+                Reference Date: $currentDate.
+
+                Rules:
+                1. needs_search = false:
+                   - Greetings, chit-chat, personal remarks, advice, opinions, compliments (e.g. "হাই", "হ্যালো", "ধন্যবাদ", "কেমন আছেন", "hi", "how are you").
+                   - Programming code generation, syntax, debugging, algorithms, math calculations.
+                   - Static encyclopedic facts, historical facts, definitions, or science concepts (e.g. "speed of light", "capital of France").
+                   - Queries asking for explanation, creative writing, or translation of static topics.
+                   - Requests about the assistant itself ("who are you", "তুমি কে").
+                2. needs_search = true:
+                   - Breaking news, recent political, social, or incident updates in Bangladesh or worldwide.
+                   - Real-time/fluctuating information (today's gold price, dollar rate, commodity price, live match score, today's weather).
+                   - Verifying claims, rumours, viral social media posts, or uncertain events.
+                   - Specific government administrative rules, official portal links, fees, or circulars.
+                   - When fact check mode is requested.
+                3. If needs_search is true:
+                   - Produce "search_query": Exactly 3 to 5 high-density keyword terms in Bengali or English optimized for search engines.
+                   - Drop filler words. Resolve pronouns/anaphora using the context.
+                4. If needs_search is false:
+                   - "search_query" MUST be empty string "".
+
+                JSON Schema:
+                {
+                  "needs_search": true or false,
+                  "search_query": "3-5 keyword terms or empty string"
+                }
+                Do not include <think> tags, markdown or extra text.
+            """.trimIndent()
+
+            val userPromptText = if (recentHistoryContext.isNotBlank()) {
+                "Recent Context:\n$recentHistoryContext\n\nCurrent Message: $clean"
+            } else {
+                "Current Message: $clean"
+            }
+
+            val request = LlmRequest(
+                systemPrompt = systemPrompt,
+                userPrompt = userPromptText,
+                jsonOutput = true,
+                temperature = 0.0,
+                maxTokens = 120
+            )
+
+            val jsonStr = withTimeout(4000L) {
+                llmOrchestrator.generateFallback(request)
+            }
+
+            if (jsonStr.isBlank()) throw Exception("Empty response from LLM router")
+
+            val cleanJson = jsonStr.replace(Regex("<think>[\\s\\S]*?</think>"), "")
+                .removePrefix("```json").removeSuffix("```").trim()
+
+            val start = cleanJson.indexOf("{")
+            val end = cleanJson.lastIndexOf("}")
+            val root = if (start != -1 && end != -1) {
+                JSONObject(cleanJson.substring(start, end + 1))
+            } else {
+                JSONObject(cleanJson)
+            }
+
+            val needsSearch = root.optBoolean("needs_search", isFactCheckMode)
+            val parsedSearchQuery = root.optString("search_query", "").trim()
+            val effectiveQuery = if (needsSearch) {
+                parsedSearchQuery.ifBlank { clean }
+            } else {
+                ""
+            }
+
+            circuitBreaker.recordSuccess()
+            PipelineTelemetry.log(pipelineType, PipelineStage.PLANNER, "Routing decision: needsSearch=$needsSearch, query='$effectiveQuery'")
+            SearchRoutingDecision(needsSearch = needsSearch, searchQuery = effectiveQuery)
+        } catch (e: Exception) {
+            PipelineTelemetry.warn(pipelineType, PipelineStage.PLANNER, "Routing failed (${e.message}). Using safe fallback.")
+            val hasTemporal = listOf("আজ", "আজকে", "গত", "সাম্প্রতিক", "সর্বশেষ", "খবর", "দাম", "now", "today", "latest", "news")
+                .any { clean.contains(it, ignoreCase = true) }
+            val fallbackNeeds = isFactCheckMode || hasTemporal
+            SearchRoutingDecision(
+                needsSearch = fallbackNeeds,
+                searchQuery = if (fallbackNeeds) clean else ""
+            )
+        }
+    }
 }

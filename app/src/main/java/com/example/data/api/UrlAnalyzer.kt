@@ -9,6 +9,13 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 
+data class ResolvedArticle(
+    val title: String,
+    val content: String,
+    val author: String,
+    val url: String
+)
+
 class LoginWallException(message: String) : Exception(message)
 
 /**
@@ -17,6 +24,55 @@ class LoginWallException(message: String) : Exception(message)
  * Fully compliant with Google Play Store policies (Zero local scraping or hidden WebViews).
  */
 class UrlAnalyzer {
+
+    /**
+     * Resolves and extracts article content (title, content, author) from a given URL
+     * using the remote Cloudflare Worker content service (ARTICLE_RESOLVER_URL).
+     */
+    suspend fun resolveArticle(url: String): ResolvedArticle? = withContext(Dispatchers.IO) {
+        val rawBase = BuildConfig.ARTICLE_RESOLVER_URL.trim().removeSurrounding("\"").removeSurrounding("'").trim().trimEnd('/')
+        if (rawBase.isBlank()) {
+            return@withContext null
+        }
+
+        val endpoint = if (rawBase.endsWith("/resolve") || rawBase.endsWith("/parse")) {
+            rawBase
+        } else {
+            "$rawBase/resolve"
+        }
+
+        val client = NetworkClientProvider.ocrAndLlmClient
+        val mediaType = "application/json".toMediaType()
+        val payload = JSONObject().apply {
+            put("url", url)
+        }
+
+        val request = Request.Builder()
+            .url(endpoint)
+            .post(payload.toString().toRequestBody(mediaType))
+            .build()
+
+        try {
+            client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string() ?: return@withContext null
+                if (!response.isSuccessful) return@withContext null
+
+                val json = JSONObject(responseBody)
+                if (!json.optBoolean("success", true)) return@withContext null
+
+                val title = json.optString("title", "").trim()
+                val content = json.optString("content", "").trim()
+                val author = json.optString("author", "").trim()
+
+                if (content.isNotBlank() || title.isNotBlank()) {
+                    ResolvedArticle(title = title, content = content, author = author, url = url)
+                } else null
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("UrlAnalyzer", "Failed to resolve article from $url: ${e.message}")
+            null
+        }
+    }
 
     /**
      * Resolves the given URL via the Cloudflare content service, parses the extracted content,

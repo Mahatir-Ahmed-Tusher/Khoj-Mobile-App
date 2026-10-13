@@ -37,6 +37,11 @@ data class DeepSearchPlan(
     val queryEn: String? = null
 )
 
+data class SearchRoutingDecision(
+    val needsSearch: Boolean,
+    val searchQuery: String
+)
+
 data class DeepSearchRawSource(
     val title: String,
     val url: String,

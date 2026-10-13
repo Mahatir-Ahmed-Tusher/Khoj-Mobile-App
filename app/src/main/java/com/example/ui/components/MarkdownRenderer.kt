@@ -312,6 +312,26 @@ fun parseMarkdown(text: String): List<MarkdownBlock> {
     return blocks
 }
 
+private fun parseCitationNumber(raw: String): Int? {
+    val trimmed = raw.trim()
+    val normalized = trimmed.map { ch ->
+        when (ch) {
+            '০' -> '0'
+            '১' -> '1'
+            '২' -> '2'
+            '৩' -> '3'
+            '৪' -> '4'
+            '৫' -> '5'
+            '৬' -> '6'
+            '৭' -> '7'
+            '৮' -> '8'
+            '৯' -> '9'
+            else -> ch
+        }
+    }.joinToString("")
+    return normalized.toIntOrNull()
+}
+
 fun parseInlineMarkdown(
     text: String,
     fontToUse: FontFamily,
@@ -434,17 +454,21 @@ fun parseInlineMarkdown(
                 }
             }
             
-            // Check for numbered citation [1] / [1, 2] WITHOUT a following (url)
+            // Check for numbered citation [1] / [1, 2] / [১, ২] WITHOUT a following (url)
             if (text.startsWith("[", i)) {
                 val endBracket = text.indexOf("]", i + 1)
                 if (endBracket != -1) {
                     val nextChar = text.getOrNull(endBracket + 1)
                     if (nextChar != '(') { // not a markdown link [label](url)
                         val inner = text.substring(i + 1, endBracket).trim()
-                        val nums = inner.split(",").mapNotNull { it.trim().toIntOrNull() }
-                        if (nums.isNotEmpty()) {
+                        val parts = inner.split(",")
+                        val parsedItems = parts.mapNotNull { part ->
+                            val num = parseCitationNumber(part)
+                            if (num != null) Pair(part.trim(), num) else null
+                        }
+                        if (parsedItems.isNotEmpty() && parsedItems.size == parts.size) {
                             append("[")
-                            nums.forEachIndexed { idx, num ->
+                            parsedItems.forEachIndexed { idx, (origText, num) ->
                                 if (idx > 0) append(", ")
                                 pushStringAnnotation(tag = "CITATION", annotation = "$num")
                                 withStyle(SpanStyle(
@@ -453,7 +477,7 @@ fun parseInlineMarkdown(
                                     fontSize = 12.sp,
                                     textDecoration = TextDecoration.Underline,
                                     fontFamily = fontToUse
-                                )) { append("$num") }
+                                )) { append(origText) }
                                 pop()
                             }
                             append("]")
@@ -482,7 +506,7 @@ fun MarkdownText(
     onCitationClick: ((Int) -> Unit)? = null
 ) {
     val uriHandler = LocalUriHandler.current
-    val blocks = parseMarkdown(text)
+    val blocks = remember(text) { parseMarkdown(text) }
     
     val linkColor = if (isUser) Color(0xFFE0F2FE) else Color(0xFF0284C7)
     val displayTextColor = if (isUser) Color.White else textColor
@@ -654,6 +678,11 @@ fun MarkdownText(
                                                 if (url.startsWith("http")) {
                                                     uriHandler.openUri(url)
                                                 }
+                                                return@ClickableText
+                                            }
+                                        annotatedItem.getStringAnnotations(tag = "CITATION", start = offset, end = offset)
+                                            .firstOrNull()?.let { ann ->
+                                                ann.item.toIntOrNull()?.let { id -> onCitationClick?.invoke(id) }
                                             }
                                     },
                                     modifier = Modifier.weight(1f)
@@ -693,6 +722,11 @@ fun MarkdownText(
                                                 if (url.startsWith("http")) {
                                                     uriHandler.openUri(url)
                                                 }
+                                                return@ClickableText
+                                            }
+                                        annotatedItem.getStringAnnotations(tag = "CITATION", start = offset, end = offset)
+                                            .firstOrNull()?.let { ann ->
+                                                ann.item.toIntOrNull()?.let { id -> onCitationClick?.invoke(id) }
                                             }
                                     },
                                     modifier = Modifier.weight(1f)

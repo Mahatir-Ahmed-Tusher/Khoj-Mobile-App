@@ -40,13 +40,15 @@ data class KhojChatSource(
     val title: String,
     val url: String,
     val snippet: String = "",
-    val content: String? = null
+    val content: String? = null,
+    val date: String? = null
 )
 
 data class KhojChatSession(
     val id: String,
     val title: String,
-    val timestamp: Long
+    val timestamp: Long,
+    val isPinned: Boolean = false
 )
 
 sealed class KhojChatState {
@@ -54,6 +56,9 @@ sealed class KhojChatState {
     object AutoDetecting : KhojChatState()
     object Searching : KhojChatState()
     object Generating : KhojChatState()
+    data class DeepSearching(val stageText: String) : KhojChatState()
+    data class AiTextDetecting(val stageText: String) : KhojChatState()
+    data class AiImageDetecting(val stageText: String) : KhojChatState()
     data class Success(val responseText: String, val verdict: String?, val sources: List<KhojChatSource>, val autoSwitchedToFactCheck: Boolean) : KhojChatState()
     data class Error(val message: String) : KhojChatState()
 }
@@ -86,6 +91,117 @@ class KhojChatEngine(private val context: Context) {
         "কর ও রাজস্ব বিষয়ক সেবা" to listOf("https://nbr.gov.bd/", "https://etaxnbr.gov.bd/"),
         "ভূমি সেবা" to listOf("http://www.minland.gov.bd/", "https://land.gov.bd/", "https://dlrs.gov.bd/")
     )
+
+    private val urlAnalyzer by lazy { UrlAnalyzer() }
+
+    fun getSearchWorkerUrl(): String {
+        val defaultUrl = "https://khoj-search-api.mahatirtusher.workers.dev"
+        val prefs = context.getSharedPreferences("khoj_settings", Context.MODE_PRIVATE)
+        val custom = prefs.getString("khoj_search_api_url", null)
+        if (!custom.isNullOrBlank()) return custom.trimEnd('/')
+        return try {
+            val buildConfigUrl = BuildConfig.KHOJ_SEARCH_API_URL
+            if (!buildConfigUrl.isNullOrBlank()) buildConfigUrl.trimEnd('/') else defaultUrl
+        } catch (_: Exception) {
+            defaultUrl
+        }
+    }
+
+    suspend fun searchTinyFish(workerUrl: String, query: String, maxResults: Int = 8): List<KhojChatSource> = withContext(Dispatchers.IO) {
+        val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+        val url = "$workerUrl/tinyfish/search?q=$encodedQuery&max_results=$maxResults"
+        val request = Request.Builder().url(url).get().build()
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext emptyList()
+                val body = response.body?.string() ?: return@withContext emptyList()
+                val root = JSONObject(body)
+                val resultsArr = root.optJSONArray("results") ?: return@withContext emptyList()
+                val sources = mutableListOf<KhojChatSource>()
+                for (i in 0 until resultsArr.length()) {
+                    val item = resultsArr.optJSONObject(i) ?: continue
+                    val itemUrl = item.optString("url", "")
+                    val title = item.optString("title", "ওয়েব ফলাফল")
+                    val snippet = item.optString("snippet", item.optString("content", ""))
+                    if (itemUrl.isNotBlank() && snippet.isNotBlank()) {
+                        sources.add(KhojChatSource(title = title, url = itemUrl, snippet = snippet))
+                    }
+                }
+                sources
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "searchTinyFish failed: ${e.message}")
+            emptyList()
+        }
+    }
+
+    suspend fun searchDegoog(workerUrl: String, query: String, maxResults: Int = 8): List<KhojChatSource> = withContext(Dispatchers.IO) {
+        val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+        val url = "$workerUrl/degoog?q=$encodedQuery&max_results=$maxResults"
+        val request = Request.Builder().url(url).get().build()
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext emptyList()
+                val body = response.body?.string() ?: return@withContext emptyList()
+                val root = JSONObject(body)
+                val resultsArr = root.optJSONArray("results") ?: return@withContext emptyList()
+                val sources = mutableListOf<KhojChatSource>()
+                for (i in 0 until resultsArr.length()) {
+                    val item = resultsArr.optJSONObject(i) ?: continue
+                    val itemUrl = item.optString("url", "")
+                    val title = item.optString("title", "ওয়েব ফলাফল")
+                    val snippet = item.optString("snippet", item.optString("content", ""))
+                    if (itemUrl.isNotBlank() && snippet.isNotBlank()) {
+                        sources.add(KhojChatSource(title = title, url = itemUrl, snippet = snippet))
+                    }
+                }
+                sources
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "searchDegoog failed: ${e.message}")
+            emptyList()
+        }
+    }
+
+    suspend fun searchWithTinyFishAndDegoogFallback(query: String): List<KhojChatSource> = withContext(Dispatchers.IO) {
+        val workerUrl = getSearchWorkerUrl()
+        // 1. Primary: /tinyfish/search
+        val tinyFishSources = searchTinyFish(workerUrl, query, 8)
+        if (tinyFishSources.isNotEmpty()) {
+            return@withContext tinyFishSources
+        }
+        // 2. Fallback: /degoog
+        val degoogSources = searchDegoog(workerUrl, query, 8)
+        if (degoogSources.isNotEmpty()) {
+            return@withContext degoogSources
+        }
+        emptyList()
+    }
+
+    fun sanitizeChatResponse(rawText: String, userQuery: String): String {
+        var cleaned = rawText.trim()
+
+        // 1. Strip religious & sectarian greeting prefixes from the very beginning of the response
+        val religiousGreetingRegex = Regex(
+            """^(?:[\s*#_]*(?:নমস্কার|সালাম|আসসালামু\s*আলাইকুম|আদাব|নমস্কার\s*বন্ধুরা|সালাম\s*বন্ধুরা)[!।,\s*#_]*)+""",
+            RegexOption.IGNORE_CASE
+        )
+        cleaned = cleaned.replace(religiousGreetingRegex, "").trim()
+
+        // 2. Strip unsolicited self-introduction boilerplate if user didn't ask identity
+        val asksIdentity = listOf("তুমি কে", "তোমার নাম", "কে তৈরি করেছে", "কে বানিয়েছে", "who are you", "what is your name", "who created you")
+            .any { userQuery.contains(it, ignoreCase = true) }
+
+        if (!asksIdentity) {
+            val unsolicitedIntroRegex = Regex(
+                """^(?:[\s*#_]*আমি\s+খোঁজ\s+(?:এআই|চ্যাট)[^।!\n]*[।!\n]+[\s]*)""",
+                RegexOption.IGNORE_CASE
+            )
+            cleaned = cleaned.replace(unsolicitedIntroRegex, "").trim()
+        }
+
+        return cleaned
+    }
 
     private fun getApiKey(): String {
         val prefs = context.getSharedPreferences("khoj_settings", Context.MODE_PRIVATE)
@@ -137,9 +253,10 @@ class KhojChatEngine(private val context: Context) {
                     val url = item.optString("url", "")
                     val title = item.optString("name", "ওয়েব তথ্যসূত্র")
                     val snippet = item.optString("summary", item.optString("snippet", ""))
+                    val date = item.optString("datePublished", item.optString("dateLastCrawled", "")).takeIf { it.isNotBlank() }
                     if (url.isNotBlank() && !seenUrls.contains(url.lowercase())) {
                         seenUrls.add(url.lowercase())
-                        sources.add(KhojChatSource(title = title, url = url, snippet = snippet))
+                        sources.add(KhojChatSource(title = title, url = url, snippet = snippet, date = date))
                     }
                 }
                 sources
@@ -178,9 +295,10 @@ class KhojChatEngine(private val context: Context) {
                                 val itemUrl = item.optString("url", "")
                                 val title = item.optString("title", "ওয়েব তথ্যসূত্র")
                                 val snippet = item.optString("content", item.optString("snippet", ""))
+                                val date = item.optString("publishedDate", item.optString("date", "")).takeIf { it.isNotBlank() }
                                 if (itemUrl.isNotBlank() && !seenUrls.contains(itemUrl.lowercase())) {
                                     seenUrls.add(itemUrl.lowercase())
-                                    allSources.add(KhojChatSource(title = title, url = itemUrl, snippet = snippet))
+                                    allSources.add(KhojChatSource(title = title, url = itemUrl, snippet = snippet, date = date))
                                 }
                             }
                         }
@@ -311,6 +429,198 @@ class KhojChatEngine(private val context: Context) {
         return keywords.any { query.contains(it, ignoreCase = true) }
     }
 
+    companion object {
+        // Comprehensive auto web-search trigger keywords across Bengali, English, and Banglish (930+ keywords & phrases)
+        val webSearchTriggerKeywords = listOf(
+            // --- 1. Fact-check, Verification, Debunk, References & Sources (বাংলা & English) ---
+            "যাচাই", "সত্য", "মিথ্যা", "ফ্যাক্ট চেক", "ফ্যাক্টচেক", "ফেক্টচেক", "ফেক্ট চেক", "চেক", "চ্যাক",
+            "debunk", "গুজব", "ভুয়া", "ভুয়া", "রটেছে", "rumor", "মিথ্যে", "সঠিক কিনা", "সত্যতা",
+            "আসল নাকি নকল", "সত্যি নাকি মিথ্যা", "ভুয়া খবর", "ভুয়া খবর", "ঘটনাটি সত্যি", "খবরটি সত্যি",
+            "দাবি করা হচ্ছে", "দাবি উঠেছে", "ফাঁস", "লিক", "নকল", "ধোঁকা", "কারসাজি", "ডিপফেক",
+            "প্রতারণা", "জালিয়াতি", "ভুয়া ভিডিও", "ভুয়া ভিডিও", 
+            "ভেরিফাই", "ভ্যারিফাই", "ভ্যারিফাইড", "ভেরিফাইড", "verified", "varify",
+            "shottota", "shotyota", "sotyota", "sathyata", "shathyata", "jachai",
+            "খোঁজ ফ্যাক্টচেক", "খোঁজ ফ্যাক্টচেকার", "খোঁজ", "খোঁজ লাগাও", "খুজ লাগাও", "খোজ লাগাও",
+            "khoj factcheck", "khoj ai", "khoj lagao", "khoj lagau", "khuj lagau", "khoj lagaw",
+            "fact check", "factcheck", "fectcheck", "fect check", "check", "chek", "khuj", "khoz", "khuz",
+            "fake news", "is it true", "real or fake", "hoax", "misinformation", "disinformation", 
+            "scam", "fraud", "deepfake", "manipulated", "leaked", "leak", "claim check",
+            "খন্ডন", "খণ্ডন", "ডিবাংক", "khondon",
+            "reference", "ref", "refs", "রেফারেন্স", "র্যাফারেন্স", "র্যাফার্যান্স", "রেফার্যান্স", "রেফ",
+            "তথ্যপ্রমাণ", "তথ্য", "প্রমাণ", "যুক্তিপ্রমাণ", "তথ্যসমৃদ্ধ", "informative", "information", "info", "তত্ত্ব",
+
+            // --- 2. Religious Scriptures, Fatwa, Fiqh & Theological References ---
+            "হাদীস ঘেঁটে", "হাদিস ঘেটে", "হাদীস ঘেটে", "হাদিসে", "হাদীসে", "কোরানে", "কোরআনে", "কুরানে",
+            "হাদিস", "হাদীস", "হাদিছ", "হাদীছ", "হাদিছে", "হাদীছে",
+            "in hadith", "hadis", "hadith", "quran", "koran", "kuran",
+            "fatwa", "fotwa", "fotua", "fotoa", "fotowa", "ফতোয়া", "ফতুয়া",
+            "হারাম", "হালাল", "শিরক", "কুফর", "কাফির", "kafir", "kaafir",
+            "আয়াত", "ayah", "ayat", "মাসলা", "মাসালা", "মাছালা",
+
+            // --- 3. People, Profiles, Biographies, Leaders, Entities & 1971 Liberation War ---
+            "মাহাথির আহমেদ তুষার", "মাহাথির", "মাহাতির", "আহমেদ", "তুষার", 
+            "mahatir ahmed tusher", "mahathir ahmed tushar", "tusher", "mahatir", "ahmed", 
+            "নিফাত নাফসীন নিসা", "নিফাত", "নাফসীন", "নিসা", "nifat nafsin nisa", 
+            "banglaturing", "progga", "progga ai", "প্রজ্ঞা এআই", "this github repo",
+            "github repo", "git repo", "github repository", "git repository", "git rep",
+            "গিটহাব রিপো", "গিটহাব রিপোজিটরি", "গিটহাব রিপোজিটোরি", "গিট রিপো", "গিট রিপোজিটরি", 
+            "গীটহাব রিপো", "গীটহাব রিপোজিটরি", "গীটহাব রিপোজিটোরি", "গীট রিপো", "গীট রিপোজিটরি",
+            "জীবনী", "জীবনি", "জিবনি", "jiboni", "biography", "about his life", "about her life",
+            "who is", "look him up", "look her up", "seek about", "run this name", "এই নামটা কার", "লোকটা কে",
+            "হাদি", "হাদী", "ওসমান হাদি", "ওসমান হাদী", "osman hadi", "jaber", "inquilab manch", "ইনকিলাব মঞ্চ",
+            "হাসিনা", "ফ্যাসিস্ট", "ফেসিস্ট", "fascist", "তারেক রহমান", "তারেক জিয়া",
+            "বঙ্গবন্ধু", "শেখ", "মুজিব", "মুজিবুর", "sheikh", "mujib", "rahman", "mujibur", "ziaur rahman",
+            "andolon", "andolone", "আন্দোলন", "আন্দোলনে", "মুভমেন্ট", "movement",
+            "১৯৭১", "1971", "গণহত্যা", "মুক্তিযুদ্ধ", "মুক্তি যুদ্ধ", "একাত্তর", "একাত্তরের",
+            "muktijuddho", "mukti juddho", "moktijoddo", "liberation war",
+            "বুদ্ধিজীবী", "বুদ্ধিজীবি", "বুদ্ধিজিবী", "বুদ্ধিজিবি",
+            "জেনোসাইড", "জেনসাইড", "genocide", "massacre", "ম্যাসাকার",
+
+            // --- 4. Law, Constitution, Governance, Crimes & Court Cases ---
+            "সংবিধান", "বিধিনিষেদ", "আইনী", "আইনি", "law", "constitute", "আইন", "বিধান", "বিদান", "ফয়সালা", "বন্দোবস্ত", "বন্দবস্ত",
+            "bidhan", "bidhaan", "bidan", "ain", "foysala",
+            "হত্যা", "হত্যামামলা", "মামলা", "lawsuit", "sue",
+            "sorkari", "সরকারি", "সরকারী",
+
+            // --- 5. Trends & Viral Phenomena ---
+            "trandy", "trendy", "trand", "trend", 
+            "ট্র্যান্ড", "ট্র্যানড", "ট্রেনড", "ট্রেন্ড", "ট্রেন্ডি", "ট্র্যান্ডি", "ট্র্যানডি", "ট্রেনডি",
+
+            // --- 6. Academic, Research, Publications, Media, Music & Science ---
+            "books", "works", "রিলিজ", "release", "released", "mukti pabe", "mukti", "rilis", "রিলিস", 
+            "শুভমুক্তি", "reliz", "cutting edge", "state of art", "state-of-art", "sota", 
+            "literature survey", "related works",
+            "publish", "published", "প্রকাশিত", "prokashito", "prokasito", "পাব্লিশ", "পাবলিশ", "পাবলিস",
+            "প্রকাশ", "প্রকাস", "prokas", "prokash", "publication", "prokashoni", "prokashona", "prokashon",
+            "প্রকাশনা", "প্রকাশনী", "প্রকাশন", "জার্নাল", "journal", "রকমারি", "রকমারী", "rokomari", 
+            "book website", "book sites",
+            "pdf download link", "download link", "pdf", "doc file", "api key", "api", "api doc", "documentation",
+            "anime", "ai models", "ai model", "model", "parameters", "ai", "এআই মডেল", "rag",
+            "best courses", "best", "tutorial", "টিউটোরিয়াল", "টিউটরিয়াল", "কোর্স", "course",
+            "suggest", "সাজেস্ট", "তাঁর বইয়ে", "in his book", "in her book",
+            "nice songs", "nice song",
+            "বিবর্তন", "জিন", "বৈজ্ঞানিক", "papers", "paper", "পেপারস", "পেপার",
+            "জাতীয় দৈনিক", "ন্যাশনাল ডেইলি", "পত্রিকা", "খবরের কাগজ", "খবরের ওয়েবসাইট", "খবরের সাইট", "khoborer site",
+            "potrika", "patrika", "ম্যাগাজিন", "magazine", "monthly", "quarterly", "ত্রৈমাসিক", "মেগাজিন", "megazine",
+            "issue", "latest issue", "এই সংখ্যা", "সংখ্যায়",
+            "next movie", "next song", "next book", "next volume", "next season", "next episode",
+            "নেক্সট বই", "নেক্সট গান", "নেক্সট ভলিউম", "নেক্সট সিজন", "নেক্সট এপিসোড", 
+            "পরবর্তী বই", "পরবর্তী গান", "পরবর্তী ভলিউম", "পরবর্তী সিজন", "পরবর্তী এপিসোড",
+            "সেরা সিনেমা", "সেরা মুভি", "সেরা বই", "সেরা পর্ব", "সেরা এপিসোড",
+            "shera movies", "shera movie", "sera movie", "sera cinema", "shera cinema", "sera ep", "shera episode",
+
+            // --- 6. News, Real-Time, Timeliness & Happening Now (বাংলা & English) ---
+            "বর্তমান", "বর্তমানে", "বত্তমান", "বত্তমানে", "at present", "present",
+            "today", "next day", "the day after tomorrow", "yesterday", "tomorrow",
+            "পরশু", "আগামী পরশু", "গত পরশু", "আগামী", "আগামি", "গত",
+            "এই মুহুত্তে", "এইমুহুত্তে", "এই মূহুত্তে", "এইমূহুত্তে",
+            "ব্রেকিং", "ব্রেকিং নিউজ", "তাজা খবর", "তাজা সংবাদ", "আজকের খবর", "আজকের সংবাদ", 
+            "সর্বশেষ খবর", "সর্বশেষ সংবাদ", "সাম্প্রতিক", "সম্প্রতি", "এইমাত্র", "এইমাত্র পাওয়া", 
+            "আজকাল", "আজকে", "আজকের", "আজ ", "আজকের দিন", "ঘটেছে", "কবে", "কোনদিন", "কোন দিন",
+            "কখন", "কবে আসবে", "কখন আসবে", "কখনকার", "কি ঘটতেসে", "কী ঘটতেসে", "কি ঘটতেছে", "কী ঘটতেছে", 
+            "কী ঘটছে", "কি ঘটসে", "এই মুহুর্তে", "এইমুহুর্তে", "এই মূহুর্তে", "এইমূহুর্তে",
+            "কীভাবে হবে", "কিভাবে হবে", "কত দিন পর হবে", "কতোদিন পর হবে",
+            "সর্বশেষ আপডেট কি", "লাস্ট", "সর্বশেষ", "সবশেষ", "আপডেট", "আপদেত", "সর্বশেষ সংস্করণ", 
+            "লেটেস্ট", "ল্যাটেস্ট", "আপটুডেট", "আপ টু ডেট", "আপটু ডেট", "আপটুডেইট", "আপ টু ডেইট",
+            "এই বছর", "এই মাসে", "এই মাস", "গত মাস", "লাস্ট মান্থ", "গত সপ্তাহে", "এই সপ্তাহে", "এই সপ্তাহ", "গত সপ্তাহ", "এই উইক", "গত উইক",
+            "লাইভ খবর", "লাইভ আপডেট", "সরাসরি খবর", "নতুন খবর", "খবরের আপডেট",
+
+            // --- 7. Explicit Web Search & Crawl Directives (বাংলা & English) ---
+            "ওয়েব সার্চ করো", "ওয়েব সার্চ করো", "ওয়েব সার্চ", "ওয়েব সার্চ", "ওয়েব", "ওয়েব", 
+            "সার্চ", "গুগল", "নেট সার্চ", "ইন্টারনেট ঘাঁটো", "জুলাই আন্দোলন", "ইন্টারনেট ঘাটো", "ইন্টারনেট ঘেটে", 
+            "ইন্টারনেট ঘেঁটে", "নেট ঘাঁটো", "নেট ঘেটে", "নেট ঘাটো", "নেট ঘাইটা", "নেট ঘাঁইটা", 
+            "খুঁজো", "খোঁজো", "খুঁজে জানাও", "খুঁজে দেখো", "খোঁজে দেখো", "khuija", "জানাও",
+            "khujo", "khuje dao", "khuje daw", "khuje", "খুঁজে", "খুজে", "খোঁজে", "খোজে", "এনে", "ene", "aina", "আইনা",
+            "কোথায়", "কই", "পাবো", "khoje", "koi pabo", "pabo", "pbo", "kothay", "pawa jabe", "paoa jbe", "paoa jabe",
+            "ইন্টারনেট", "এভাইলেবল", "উপলব্ধ", "available", "online", "অনলাইনে", "অনলাইন", "ওনলাইন", 
+            "এভেলেবল", "এবেলেবল", "abalabol", "unavailable", "availability", "এভাইলেবিলিটি", "এবেলেবিলিটি",
+            "next update", "current", "recent", "কারেন্ট", "রিসেন্ট",
+            "web search", "web", "search", "scrape", "internet", "websearch", "google", 
+            "net search", "search once", "look it up", "chatgpt this", "find it", 
+            "website", "ওয়েবসাইট", "ওয়েবসাইট", "খবর", "khobor",
+            "last update ki", "latest", "last", "update", "updated", "up to date", 
+            "accurate", "accurately", "in details", "near me", "this moment", "how to",
+
+            // --- 8. Weather, Climate & Disasters (বাংলা & English) ---
+            "আবহাওয়া", "আজ", "আবহাওয়া", "ওয়েদার", "আজকের ওয়েদার", "আজকের আবহাওয়া", "আজকের আবহাওয়া", "আজকের তাপমাত্রা", "তাপমাত্রা", 
+            "temp", "টেম্পারেচার", "তাপ", "ট্যাম্পারেচার", "ট্যাম্প", "in my area", "temp in my area", 
+            "in my location", "amar areay", "taapmatra", "tapmatra", "taap", "humidity", "হিউমিডিটি", "আর্দ্রতা", 
+            "বৃষ্টি হবে কি", "বৃষ্টি হবে কী", "ওয়েদাএ", "wether kmn", "wether koto",
+            "বৃষ্টি", "বৃষ্টিপাত", "ঝড়", "ঝড়", "ঝড়বৃষ্টি", "ঘূর্ণিঝড়", "ঘূর্ণিঝড়", "কালবৈশাখী", 
+            "বন্যা", "ভূমিকম্প", "শৈত্যপ্রবাহ", "কুয়াশা", "গরম", "তাপপ্রবাহ", "বৃষ্টির সম্ভাবনা",
+            "weather", "weather today", "today weather", "forecast", "temperature today", 
+            "rain today", "rainfall", "cyclone update", "earthquake", "heatwave", "storm",
+            "cold wave", "weather forecast",
+
+            // --- 9. Markets, Commodity Prices & Currency (বাংলা & English) ---
+            "দাম", "প্রাইস", "প্রাইজ", "কত বাড়সে", "কত বেড়েছে", "কতো বাড়সে", "খরচ কত", "খরচ কতো",
+            "সোনার দাম", "আজকের সোনার দাম", "রূপার দাম", "রুপার দাম", "ডলার রেট", "আজকের ডলার রেট", 
+            "ডলারের দাম", "টাকার মান", "মুদ্রার বিনিময় হার", "তেলের দাম", "পেট্রোল", "ডিজেল", 
+            "জ্বালানি তেল", "এলপিজি গ্যাস", "বাজার দর", "কাঁচাবাজার", "চালের দাম", "পেঁয়াজের দাম", 
+            "মুদ্রাস্ফীতি", "শেয়ার বাজার", "স্টক মার্কেট", "দ্রব্যমূল্য",
+            "daam", "dam", "cost koto", "khoros koto", "khoroch koto", "khoroc koto", "price koto", "prize koto",
+            "today price", "gold price", "silver price", "dollar rate", "exchange rate", 
+            "currency rate", "fuel price", "petrol price", "diesel price", "stock market", 
+            "inflation rate",
+
+            // --- 10. Sports, Tournaments & Live Scores ---
+            "আজকের খেলা", "খেলার খবর", "লাইভ স্কোর", "ক্রিকেট স্কোর", "ফুটবল ম্যাচ", "বিশ্বকাপ", 
+            "টস", "ফলাফল", "কে জিতল", "জিতসে", "জিতেছে", "জিতলো", "ম্যাচ কে জিতেছে", "খেলার সূচি", "আজকের ম্যাচ",
+            "স্কোর", "পয়েন্ট", "point", "score", "jitlo",
+            "match er score", "vs", "match today", "cricket score", "football score", "world cup", "who won",
+
+            // --- 11. Critical Breaking Incidents, Public & Exams ---
+            "মারা গেছেন", "মারা গেছে", "মৃত্যু হয়েছে", "নিহত", "আহত", "গ্রেপ্তার", "গ্রেফতার", 
+            "আটক", "পদত্যাগ", "বরখাস্ত", "বদলি", "নিষিদ্ধ", "বিধি নিষেধ", "নিয়ম কানুন", 
+            "রেজাল্ট", "রেসাল্ট", "রেজালট", "রেসালট", "folafol", "result", "result kobe", "result kokhon",
+            "পরীক্ষার রেজাল্ট", "ফল প্রকাশ", "নিয়োগ বিজ্ঞপ্তি", "বিজ্ঞপ্তি", "ছুটির ঘোষণা", "বন্ধ ঘোষণা", "দুর্ঘটনা", "অগ্নিকাণ্ড",
+            "passed away", "died today", "arrested", "resigned", "exam result", "circular", "job circular",
+
+            // --- 12. Banglish (Romanized Bengali) ---
+            "sotti naki", "sotti ki", "aaj", "aj", "ajk", "aajke", "aajker", "aajker din", "az", "aaz", "azke", "aazke", "azker", "aazker", 
+            "shotti naki", "shotti ki", "shotti kina", "sothik kina", 
+            "mithya", "gujob", "vua", "bhua", "rotese", "ashol naki nokol", "viral video",
+            "ajker news", "ajker khobor", "ajke", "ajker", "ajkal", "samprotik", "shomprotik", 
+            "ei matro", "notun khobor", "shorboshesh", "kobe", "kondin", "kon din", "kbe",
+            "kokhon", "kokhn", "kokon", "kbe asbe", "kobe ashbe", "kokhon asbe", "kokhon ashbe", 
+            "kokhn asbe", "kokhn ashbe", "ashbey", "ashby", "kivabe ashbe", "kibhabe ashbe", 
+            "kibabe asbe", "kivave ashbe", "sorboses", "shorboshesh", "shobshesh", "sobses",
+            "kotodin por hobe", "how will it be", "after how many days",
+            "koto", "koto barse", "koto berese", "koto bereche", "koto hobe",
+            "ei bochor", "ei mashe", "ai mash", "ei mash", "ai bochor", "ai bosor", "ei bosor", 
+            "goto mash", "goto month", "ei month", "ai month", "ei year", "ai year", "last month",
+            "this week", "last week", "ei shoptahe", "ei shoptaho", "ei shoptah", "ai shoptahe", 
+            "shoptahe", "shoptaho", "ai shoptaho", "ai week", "ei week", "goto shoptay",
+            "porer boi", "porer gaan", "porer gan", "porer gun", "porer season", "porer episode", "porer ep", "porer volume",
+            "bortomane", "bortoman", "bortomaan", "bortomaane", "bottoman", "bottomaan",
+            "mohorte", "muhurte", "aimohorte", "eimohorte", "ei mohorte", "ai mohorte",
+            "kalke", "kaal", "kal", "kalk", "kaalk", "kalky",
+            "porshu", "porsu", "agami", "agame", "goto",
+            "eimuhurte", "aimuhurte", "ei muhurte", "ai muhurte", "aimuhurute", "eimhurute", "ki ghottese", 
+            "internet ghato", "internet ghete", "net ghato", "net ghete", "net ghaita", 
+            "amar location er ashepashe",
+            "abohawa", "abohaoa", "abhawa", "abawa", "tapmatra", 
+            "thanda kmn", "thanda koto", "tanda koto", "tanda kmn", "tanda kemon", "tanda kamon", "thanda kemon",
+            "brishti", "jhor", "bonna", "vumikompo", "sonar dam", "shonar dam", "dollar rate", 
+            "dollar er dam", "teler dam", "bazar dor", "share bazar", "ajker khela", 
+            "khelar khobor", "live score", "ke jitlo", "jitse", "jiteche", "mara gese", "mara gechen", "mrittu", 
+            "greftar", "podotyag", "durghotona", "porikhar result", "fol prokash", "niyog"
+        )
+
+        fun containsAutoWebTriggerKeywords(query: String): Boolean {
+            if (query.isBlank()) return false
+            val lower = query.lowercase().trim()
+            val tokens = lower.split(Regex("""[\s,?.!।:;'"\-\(\)]+""")).filter { it.isNotBlank() }.toSet()
+            return webSearchTriggerKeywords.any { kw ->
+                if (kw.length <= 6 && !kw.contains(" ")) {
+                    tokens.contains(kw) || lower.startsWith("$kw ") || lower.endsWith(" $kw") || lower.contains(" $kw ") || lower == kw
+                } else {
+                    lower.contains(kw)
+                }
+            }
+        }
+    }
+
     private val sessionsListKey = "chat_sessions_list"
     private val activeSessionIdKey = "active_session_id"
 
@@ -343,11 +653,15 @@ class KhojChatEngine(private val context: Context) {
                     KhojChatSession(
                         id = obj.getString("id"),
                         title = obj.getString("title"),
-                        timestamp = obj.getLong("timestamp")
+                        timestamp = obj.getLong("timestamp"),
+                        isPinned = obj.optBoolean("isPinned", false)
                     )
                 )
             }
-            return sessions.sortedByDescending { it.timestamp }
+            return sessions.sortedWith(
+                compareByDescending<KhojChatSession> { it.isPinned }
+                    .thenByDescending { it.timestamp }
+            )
         } catch (e: Exception) {
             Log.e(tag, "Failed to load sessions list", e)
             return emptyList()
@@ -364,12 +678,34 @@ class KhojChatEngine(private val context: Context) {
                     put("id", sess.id)
                     put("title", sess.title)
                     put("timestamp", sess.timestamp)
+                    put("isPinned", sess.isPinned)
                 })
             }
             prefs.edit().putString(sessionsListKey, array.toString()).apply()
         } catch (e: Exception) {
             Log.e(tag, "Failed to save sessions list", e)
         }
+    }
+
+    // Rename an existing session
+    fun renameSession(sessionId: String, newTitle: String) {
+        val current = loadSessions().map {
+            if (it.id == sessionId) it.copy(title = newTitle.trim()) else it
+        }
+        saveSessions(current)
+    }
+
+    // Toggle pin status for a session
+    fun togglePinSession(sessionId: String): Boolean {
+        var newPinState = false
+        val current = loadSessions().map {
+            if (it.id == sessionId) {
+                newPinState = !it.isPinned
+                it.copy(isPinned = newPinState)
+            } else it
+        }
+        saveSessions(current)
+        return newPinState
     }
 
     // Get current active session ID
@@ -412,7 +748,8 @@ class KhojChatEngine(private val context: Context) {
                             KhojChatSource(
                                 title = sObj.getString("title"),
                                 url = sObj.getString("url"),
-                                snippet = sObj.optString("snippet", "")
+                                snippet = sObj.optString("snippet", ""),
+                                date = if (sObj.has("date")) sObj.optString("date", null) else null
                             )
                         )
                     }
@@ -473,6 +810,7 @@ class KhojChatEngine(private val context: Context) {
                             put("title", s.title)
                             put("url", s.url)
                             put("snippet", s.snippet)
+                            if (!s.date.isNullOrBlank()) put("date", s.date)
                         })
                     }
                     put("sources", sourcesArr)
@@ -565,7 +903,8 @@ class KhojChatEngine(private val context: Context) {
         query: String,
         activeMode: String,
         history: List<KhojChatMessage>,
-        responseLanguage: ResponseLanguage = ResponseLanguage.AUTO
+        responseLanguage: ResponseLanguage = ResponseLanguage.AUTO,
+        isWebSearchEnabled: Boolean = false
     ): Flow<KhojChatState> = flow {
         var currentMode = activeMode
         var autoSwitched = false
@@ -578,8 +917,6 @@ class KhojChatEngine(private val context: Context) {
             kotlinx.coroutines.delay(1000)
         }
 
-        emit(KhojChatState.Searching)
-
         val apiKey = getApiKey()
         if (apiKey.isEmpty() || apiKey.startsWith("MY_") || apiKey.contains("PLACEHOLDER")) {
             emit(KhojChatState.Error("Gemini API Key is not configured. Please configure it in your secrets or Settings."))
@@ -588,15 +925,27 @@ class KhojChatEngine(private val context: Context) {
 
         val langSearchKey2 = getLangSearchKey2()
 
+        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+        val currentDateStr = sdf.format(java.util.Date())
+
         val languageInstruction = ResponseLanguageManager(context).apply {
             setLanguage(responseLanguage)
         }.getLanguageInstructionPrompt()
 
         val identityInstruction = """
-            Identity & Creator Guidelines:
+            Identity & Response Behavior Guidelines:
             - You are 'Khoj AI' (খোঁজ এআই).
-            - If anyone asks who you are, what model you are, or who created you, always introduce yourself clearly and proudly as 'খোঁজ এআই' (Khoj AI), created and trained by 'টিম খোঁজ' (Team Khoj).
-            - If users want to learn more about you or your creators, provide the official website: [khoj-ai.bd](https://khoj-ai.bd/) (https://khoj-ai.bd/).
+            - STRICT ANTI-REPETITION & ZERO UNSOLICITED INTRODUCTION RULE:
+              * NEVER start, pepper, or end normal messages by introducing yourself (e.g., NEVER say 'আমি খোঁজ এআই...', 'আমি খোঁজ চ্যাট...', 'আমি টিম খোঁজ দ্বারা তৈরি...', 'আমি একটি এআই সহায়ক...').
+              * NEVER use mechanical boilerplate opening or closing greetings like 'আমি আপনাকে কীভাবে সাহায্য করতে পারি?' or 'আমি তথ্য দিতে সর্বদা প্রস্তুত'.
+              * Jump straight and directly into the substantive answer from the very first word.
+            - DYNAMIC & CREATIVE IDENTITY RESPONSE (ONLY WHEN EXPLICITLY ASKED):
+              * If and ONLY if the user specifically asks about your identity (e.g., 'তুমি কে?', 'তোমার নাম কি?', 'কে তোমাকে বানিয়েছে?', 'who are you?', 'তোমার কাজ কি?'):
+                1. Answer creatively, naturally, and contextually based on the user's specific query and tone—NEVER recite a canned, rigid, or memorized script.
+                2. Core factual anchor: Your name is 'খোঁজ' / 'খোঁজ এআই' (Khoj AI), developed by 'টিম খোঁজ' (Team Khoj) as an intelligent fact-checking, verification, and knowledge assistant tailored for Bangladesh.
+                3. Do NOT automatically recite or paste website URLs (such as khoj-ai.bd) unless the user explicitly asks for your website, link, or where to find you online.
+                4. Match the user's vibe: If the user asks casually/friendly (e.g., 'কেমন আছো, তুমি কে ভাই?'), respond with warmth and natural Bengali phrasing. If they ask intellectually about what you can do, explain your analytical, reasoning, and fact-checking capabilities in engaging, conversational language.
+            - STRICT GREETING & TONE RULE: Strictly NEVER use religious, sectarian, or communal greetings such as 'নমস্কার' (Namaskar), 'আদাব' (Adab), 'সালাম' / 'আসসালামু আলাইকুম' (Salam / Assalamu Alaikum), or any religious salutations. Maintain a completely secular, neutral, objective, and professional tone at all times. Do not start messages with filler greetings; jump straight into the answer.
             - Maintain sharp conversational memory. Remember facts and questions from earlier in this conversation and reference them when appropriate.
         """.trimIndent()
 
@@ -616,34 +965,69 @@ class KhojChatEngine(private val context: Context) {
                     "Ground your answers to official government services of Bangladesh. Use standard .gov.bd domains for resources and provide them clearly in markdown links."
                 }
 
-                "You are an expert citizen service assistant of Bangladesh. Your duty is to explain administrative and public services clearly and helpfully. " +
+                "You are an expert citizen service assistant of Bangladesh. Your duty is to explain administrative and public services clearly and helpfully.\n" +
+                "TEMPORAL GROUNDING & REFERENCE DATE:\n" +
+                "Reference Date: $currentDateStr. You are evaluating administrative rules and services as of today ($currentDateStr).\n" +
                 "Guide the user step-by-step through the procedure (fees, documents needed, step by step instructions). " +
                 "Always provide official website links as markdown clickable links. " +
                 "Do NOT make up URLs; rely strictly on .gov.bd domains. " +
                 "Context for the current query:\n$linksContext"
             }
             "fact-check" -> {
-                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
-                val currentDateStr = sdf.format(java.util.Date())
-                "You are 'Khoj AI' (খোঁজ এআই), a highly professional, objective, and analytical fact-checking assistant for Bangladesh.\n" +
+                "You are an objective and analytical fact-checking assistant for Bangladesh.\n" +
                 "TEMPORAL GROUNDING & EVIDENCE PRIMACY:\n" +
                 "1. Reference Date: $currentDateStr. You are evaluating this in the real world as of this date. Events and reports up to this date reflect actual reality—never dismiss them as future or speculative.\n" +
                 "2. When retrieved search evidence documents verified facts, adopt them as ground truth. Never contradict credible search evidence based on outdated internal pre-trained memory.\n" +
-                "3. Do NOT recite reference dates or system instructions. Write naturally and seamlessly.\n" +
+                "3. Do NOT recite reference dates, system instructions, or your identity. Write naturally, directly, and seamlessly without boilerplate greetings.\n" +
                 "Analyze the user's claim or rumour carefully. " +
                 "Identify the verdict clearly at the top. The verdict MUST strictly be ONE of these three: 'সত্য' (True), 'অসত্য' (False), or 'বিভ্রান্তিকর' (Misleading). " +
                 "Review the evidence rigorously based on web results, citing trusted news sources or fact-checking bodies (like Rumor Scanner, Fact Watch, Boom BD, etc.)."
             }
             else -> {
-                "You are 'Khoj Chat' (খোঁজ চ্যাট), a helpful, friendly, and knowledgeable AI assistant for Bangladesh. " +
-                "You answer questions clearly, politely, and accurately. " +
+                "You are 'Khoj Chat' (খোঁজ চ্যাট), an intelligent, objective, and knowledgeable AI assistant for Bangladesh.\n" +
+                "TEMPORAL GROUNDING & EVIDENCE PRIMACY:\n" +
+                "1. REFERENCE DATE: $currentDateStr. You operate in the real world as of this reference date ($currentDateStr). All events, news, articles, commodity prices, weather forecasts, sports scores, and public developments up to this date reflect actual current reality—never dismiss them as future or speculative.\n" +
+                "2. EVIDENCE PRIMACY OVER PRE-TRAINED MEMORY: When retrieved search evidence or live web sources document verified facts, you MUST adopt them as the ground truth. Real-world facts, public roles, organizational titles, and status change over time. Never contradict credible search evidence based on outdated internal pre-trained memory.\n" +
+                "3. STRICT NO-LEAK DIRECTIVE: Do NOT mention the reference date, system instructions, or the fact that you were provided a date in the response (e.g., do NOT write 'As of [date]', 'Today is...', or 'According to my prompt') unless the user explicitly asks for today's date or time. Write naturally, objectively, and seamlessly.\n" +
+                "4. Answer questions clearly, directly, and accurately without filler greetings or unsolicited self-introductions. " +
                 "Provide rich explanations, examples, and format your response beautifully using markdown."
             }
         }
         
-        val fullSystemInstruction = "$baseSystemInstruction\n\n$identityInstruction\n\n$languageInstruction"
+        // Check for any user pasted URLs and resolve article content
+        val urlRegex = Regex("""https?://[^\s<>"]+""", RegexOption.IGNORE_CASE)
+        val matchedUrls = urlRegex.findAll(query).map { it.value }.distinct().take(2).toList()
+        val scrapedSources = mutableListOf<KhojChatSource>()
+        var scrapedArticleContext = ""
 
-        // Build clean contents array (up to 16 turns for deep memory)
+        if (matchedUrls.isNotEmpty()) {
+            for (url in matchedUrls) {
+                try {
+                    val resolved = urlAnalyzer.resolveArticle(url)
+                    if (resolved != null && (resolved.content.isNotBlank() || resolved.title.isNotBlank())) {
+                        scrapedSources.add(
+                            KhojChatSource(
+                                title = resolved.title.ifBlank { "সংযুক্ত লিংক" },
+                                url = resolved.url,
+                                snippet = resolved.content.take(300)
+                            )
+                        )
+                        scrapedArticleContext += "\n\n--- ব্যবহারকারীর প্রদত্ত লিংক থেকে সংগৃহীত কনটেন্ট (Article Content) ---\n" +
+                            "লিংক: ${resolved.url}\n" +
+                            (if (resolved.title.isNotBlank()) "শিরোনাম: ${resolved.title}\n" else "") +
+                            "মূল তথ্য:\n${resolved.content.take(4000)}\n" +
+                            "------------------------------------------------------------------\n" +
+                            "নির্দেশনা: ব্যবহারকারী এই লিংকের প্রেক্ষিতে যে প্রশ্ন বা অনুরোধ করেছেন, উপরের সংগৃহীত তথ্যের ভিত্তিতে তার সুনির্দিষ্ট উত্তর দিন।"
+                    }
+                } catch (e: Exception) {
+                    Log.w(tag, "Failed to resolve pasted link $url: ${e.message}")
+                }
+            }
+        }
+
+        val fullSystemInstruction = "$baseSystemInstruction\n\n$identityInstruction\n\n$languageInstruction$scrapedArticleContext"
+
+        // Build clean contents array (Hierarchical Sliding Memory Window: up to 24 turns)
         val contentsArray = JSONArray()
         val cleanHistory = history.filterNot { it.isError }
             .filter { it.text.isNotBlank() }
@@ -654,13 +1038,26 @@ class KhojChatEngine(private val context: Context) {
                     list
                 }
             }
-            .takeLast(16)
+            .takeLast(24)
 
-        cleanHistory.forEach { hMsg ->
+        val recentThreshold = (cleanHistory.size - 8).coerceAtLeast(0)
+
+        cleanHistory.forEachIndexed { index, hMsg ->
+            val textToSend = if (hMsg.isUser || index >= recentThreshold) {
+                hMsg.text
+            } else {
+                // Compress older assistant responses to key excerpt (~200 words)
+                val words = hMsg.text.split(Regex("""\s+"""))
+                if (words.size > 200) {
+                    words.take(200).joinToString(" ") + " … [সংক্ষিপ্ত বিবরণ]"
+                } else {
+                    hMsg.text
+                }
+            }
             contentsArray.put(JSONObject().apply {
                 put("role", if (hMsg.isUser) "user" else "model")
                 put("parts", JSONArray().apply {
-                    put(JSONObject().apply { put("text", hMsg.text) })
+                    put(JSONObject().apply { put("text", textToSend) })
                 })
             })
         }
@@ -692,182 +1089,212 @@ class KhojChatEngine(private val context: Context) {
             return sb.toString()
         }
 
-        emit(KhojChatState.Generating)
+        // 3. Web Search activation decision
+        // In "general" (Khoj Chat) mode: Search is OFF by default. It activates ONLY if user toggles web button,
+        // or if the query contains verification/claim trigger keywords, or if user pasted a link.
+        val shouldExecuteWebSearch = isWebSearchEnabled || containsAutoWebTriggerKeywords(query) || scrapedSources.isNotEmpty()
 
         var finalResult: GeminiChatResult? = null
 
         if (currentMode == "general") {
-            // Mode "খোঁজ চ্যাট":
-            // 1. Gemini Google Search Grounding
+            // Mode "Khoj Chat":
+            val webSources = if (shouldExecuteWebSearch) {
+                emit(KhojChatState.Searching)
+                val results = searchWithTinyFishAndDegoogFallback(query)
+                emit(KhojChatState.Generating)
+                results
+            } else {
+                emit(KhojChatState.Generating)
+                emptyList()
+            }
+            val allSources = (scrapedSources + webSources).distinctBy { it.url }
+
+            val groundedInstruction = if (allSources.isNotEmpty()) {
+                appendSourcesToSystemInstruction(fullSystemInstruction, allSources)
+            } else {
+                fullSystemInstruction
+            }
+
             try {
-                finalResult = callGeminiApi(apiKey, contentsArray, fullSystemInstruction, temperature, useGoogleSearchTool = true)
+                finalResult = callGeminiApi(apiKey, contentsArray, groundedInstruction, temperature, useGoogleSearchTool = false)
+                if (finalResult != null && allSources.isNotEmpty()) {
+                    finalResult = finalResult.copy(sources = allSources)
+                }
             } catch (e: Exception) {
-                Log.w(tag, "Gemini Google Search Grounding failed: ${e.message}")
+                Log.w(tag, "Gemini call in general mode failed: ${e.message}")
             }
 
-            // 2. Fallback 1: LangSearch 2
-            if (finalResult == null) {
-                Log.d(tag, "Fallback 1: Querying LangSearch 2")
-                val langSources = searchLangSearch(query, langSearchKey2)
-                if (langSources.isNotEmpty()) {
-                    val groundedInstruction = appendSourcesToSystemInstruction(fullSystemInstruction, langSources)
-                    val res = callGeminiApi(apiKey, contentsArray, groundedInstruction, temperature, useGoogleSearchTool = false)
-                    if (res != null) {
-                        finalResult = res.copy(sources = langSources)
-                    }
-                }
-            }
-
-            // 3. Fallback 2: SearXNG (reusing SearxngHelper.baseUrls)
-            if (finalResult == null) {
-                Log.d(tag, "Fallback 2: Querying SearXNG clusters")
-                val searxSources = searchSearXNG(query)
-                if (searxSources.isNotEmpty()) {
-                    val groundedInstruction = appendSourcesToSystemInstruction(fullSystemInstruction, searxSources)
-                    val res = callGeminiApi(apiKey, contentsArray, groundedInstruction, temperature, useGoogleSearchTool = false)
-                    if (res != null) {
-                        finalResult = res.copy(sources = searxSources)
-                    }
-                }
-            }
-
-            // 4. Safety net: Direct generation via multi-tier LLM cascade
+            // Safety net: Direct generation via multi-tier LLM cascade
             if (finalResult == null) {
                 Log.d(tag, "Safety net: Direct generation via LLM Orchestrator")
                 try {
                     val fallbackReq = LlmRequest(
-                        systemPrompt = fullSystemInstruction,
+                        systemPrompt = groundedInstruction,
                         userPrompt = query,
                         jsonOutput = false,
                         temperature = temperature
                     )
                     val generated = llmOrchestrator.generateFallback(fallbackReq)
                     if (generated.isNotBlank()) {
-                        finalResult = GeminiChatResult(text = generated, sources = emptyList())
+                        finalResult = GeminiChatResult(text = generated, sources = allSources)
                     }
                 } catch (_: Exception) {
-                    finalResult = callGeminiApi(apiKey, contentsArray, fullSystemInstruction, temperature, useGoogleSearchTool = false)
+                    finalResult = callGeminiApi(apiKey, contentsArray, groundedInstruction, temperature, useGoogleSearchTool = false)
+                    if (finalResult != null && allSources.isNotEmpty()) {
+                        finalResult = finalResult.copy(sources = allSources)
+                    }
+                }
+            }
+        } else if (currentMode == "citizen-service") {
+            // Mode "Citizen Service":
+            val webSources = if (shouldExecuteWebSearch) {
+                emit(KhojChatState.Searching)
+                val results = searchWithTinyFishAndDegoogFallback(query)
+                emit(KhojChatState.Generating)
+                results
+            } else {
+                emit(KhojChatState.Generating)
+                emptyList()
+            }
+            val allSources = (scrapedSources + webSources).distinctBy { it.url }
+
+            val groundedInstruction = if (allSources.isNotEmpty()) {
+                appendSourcesToSystemInstruction(fullSystemInstruction, allSources)
+            } else {
+                fullSystemInstruction
+            }
+
+            try {
+                finalResult = callGeminiApi(apiKey, contentsArray, groundedInstruction, temperature, useGoogleSearchTool = false)
+                if (finalResult != null && allSources.isNotEmpty()) {
+                    finalResult = finalResult.copy(sources = allSources)
+                }
+            } catch (e: Exception) {
+                Log.w(tag, "Gemini call in citizen-service mode failed: ${e.message}")
+            }
+
+            // Safety net: Direct generation via multi-tier LLM cascade
+            if (finalResult == null) {
+                try {
+                    val fallbackReq = LlmRequest(
+                        systemPrompt = groundedInstruction,
+                        userPrompt = query,
+                        jsonOutput = false,
+                        temperature = temperature
+                    )
+                    val generated = llmOrchestrator.generateFallback(fallbackReq)
+                    if (generated.isNotBlank()) {
+                        finalResult = GeminiChatResult(text = generated, sources = allSources)
+                    }
+                } catch (_: Exception) {
+                    finalResult = callGeminiApi(apiKey, contentsArray, groundedInstruction, temperature, useGoogleSearchTool = false)
+                    if (finalResult != null && allSources.isNotEmpty()) {
+                        finalResult = finalResult.copy(sources = allSources)
+                    }
                 }
             }
         } else {
-            // Mode "নাগরিক সেবা" (Citizen Service) & "যাচাই" (Fact Check):
-            if (currentMode == "fact-check") {
-                Log.d(tag, "Fact-Check: Querying QueryPlanningOrchestrator and SearchOrchestrator (Bilingual + Full RAG)")
-                var factCheckSources = mutableListOf<KhojChatSource>()
-                try {
-                    // 1. Query Planning with bilingual query generation
-                    val plan = queryPlanner.plan(query, QueryPlanConfig(isFactCheck = true))
-                    val qBn = plan.queryBn ?: plan.queries.firstOrNull { it.query.any { c -> c in '\u0980'..'\u09FF' } }?.query
-                    val qEn = plan.queryEn ?: plan.queries.firstOrNull { it.query.none { c -> c in '\u0980'..'\u09FF' } }?.query
+            // Mode "Fact Check":
+            emit(KhojChatState.Searching)
+            Log.d(tag, "Fact-Check: Querying QueryPlanningOrchestrator and SearchOrchestrator (Bilingual + Full RAG)")
+            var factCheckSources = mutableListOf<KhojChatSource>()
+            try {
+                // 1. Query Planning with bilingual query generation
+                val plan = queryPlanner.plan(query, QueryPlanConfig(isFactCheck = true))
+                val qBn = plan.queryBn ?: plan.queries.firstOrNull { it.query.any { c -> c in '\u0980'..'\u09FF' } }?.query
+                val qEn = plan.queryEn ?: plan.queries.firstOrNull { it.query.none { c -> c in '\u0980'..'\u09FF' } }?.query
 
-                    val primaryQuery = qBn ?: plan.queries.firstOrNull()?.query ?: query
-                    val secondaryQuery = qEn ?: (if (primaryQuery != query) query else "")
+                val primaryQuery = qBn ?: plan.queries.firstOrNull()?.query ?: query
+                val secondaryQuery = qEn ?: (if (primaryQuery != query) query else "")
 
-                    // 2. Bilingual Search with Cloudflare 69 keys + fallback cascade
-                    val rawSources = if (secondaryQuery.isNotBlank() && secondaryQuery != primaryQuery) {
-                        searchOrchestrator.executeBilingualFallbackSearch(primaryQuery, secondaryQuery) {}
-                    } else {
-                        searchOrchestrator.executeFallbackSearch(primaryQuery) {}
-                    }
+                // 2. Bilingual Search with Cloudflare 69 keys + fallback cascade
+                val rawSources = if (secondaryQuery.isNotBlank() && secondaryQuery != primaryQuery) {
+                    searchOrchestrator.executeBilingualFallbackSearch(primaryQuery, secondaryQuery) {}
+                } else {
+                    searchOrchestrator.executeFallbackSearch(primaryQuery) {}
+                }
 
-                    // 3. Rerank
-                    val rankedSources = searchOrchestrator.rerankBilingualSources(primaryQuery, secondaryQuery, rawSources)
+                // 3. Rerank
+                val rankedSources = searchOrchestrator.rerankBilingualSources(primaryQuery, secondaryQuery, rawSources)
 
-                    // 4. Content Enrichment for top 7 URLs
-                    val topUrls = rankedSources.take(7).map { it.url }
-                    if (topUrls.isNotEmpty()) {
-                        try {
-                            val contentMap = searchOrchestrator.fetchContentForUrls(topUrls)
-                            rankedSources.forEach { s ->
-                                contentMap[s.url]?.let { c ->
-                                    if (c.isNotBlank()) s.content = c
-                                }
+                // 4. Content Enrichment for top 7 URLs
+                val topUrls = rankedSources.take(7).map { it.url }
+                if (topUrls.isNotEmpty()) {
+                    try {
+                        val contentMap = searchOrchestrator.fetchContentForUrls(topUrls)
+                        rankedSources.forEach { s ->
+                            contentMap[s.url]?.let { c ->
+                                if (c.isNotBlank()) s.content = c
                             }
-                        } catch (e: Exception) {
-                            Log.w(tag, "Content extraction failed in KhojChatEngine: ${e.message}")
                         }
+                    } catch (e: Exception) {
+                        Log.w(tag, "Content extraction failed in KhojChatEngine: ${e.message}")
                     }
+                }
 
-                    factCheckSources = rankedSources.map { s ->
-                        KhojChatSource(title = s.title, url = s.url, snippet = s.snippet, content = s.content)
-                    }.toMutableList()
+                factCheckSources = rankedSources.map { s ->
+                    KhojChatSource(title = s.title, url = s.url, snippet = s.snippet, content = s.content)
+                }.toMutableList()
 
-                    val citations = CitationEngine.mapToCitations(rankedSources)
-                    val evidencePrompt = CitationEngine.buildEvidencePrompt(citations)
+                if (scrapedSources.isNotEmpty()) {
+                    factCheckSources.addAll(0, scrapedSources)
+                }
 
-                    // 5. Fact-checking synthesis using multi-tier LLM cascade
-                    val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
-                    val currentDateStr = sdf.format(java.util.Date())
+                val citations = CitationEngine.mapToCitations(rankedSources)
+                val evidencePrompt = CitationEngine.buildEvidencePrompt(citations)
 
-                    val factCheckSysPrompt = FactCheckPrompt.getSystemPrompt(currentDateStr) +
-                        "\n\n$identityInstruction\n\n$languageInstruction\n\n" +
-                        "STRUCTURE REQUIREMENT FOR KHOJ CHAT:\n" +
-                        "1. Clearly state the verdict on the first line: **সত্য** (True), **অসত্য** (False), or **বিভ্রান্তিকর** (Misleading).\n" +
-                        "2. Follow with a clear, concise summary paragraph explaining the fact-check verdict.\n" +
-                        "3. Then provide the detailed verification findings with inline citations [1], [2] referencing the evidence found."
+                // 5. Fact-checking synthesis using multi-tier LLM cascade
+                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+                val currentDateStr = sdf.format(java.util.Date())
 
-                    val factCheckUserPrompt = "FACT CHECK CLAIM: \"$query\"\n\n" +
-                        "EVIDENCE FOUND:\n$evidencePrompt\n\n" +
-                        "Analyze the evidence and provide the fact check response."
+                val factCheckSysPrompt = FactCheckPrompt.getSystemPrompt(currentDateStr) +
+                    "\n\n$identityInstruction\n\n$languageInstruction\n\n" +
+                    "STRUCTURE REQUIREMENT FOR KHOJ CHAT:\n" +
+                    "1. Clearly state the verdict on the first line: **সত্য** (True), **অসত্য** (False), or **বিভ্রান্তিকর** (Misleading).\n" +
+                    "2. Follow with a clear, concise summary paragraph explaining the fact-check verdict.\n" +
+                    "3. Then provide the detailed verification findings with inline citations [1], [2] referencing the evidence found."
 
-                    val llmReq = LlmRequest(
-                        systemPrompt = factCheckSysPrompt,
-                        userPrompt = factCheckUserPrompt,
-                        jsonOutput = false,
-                        temperature = 0.1
+                val factCheckUserPrompt = "FACT CHECK CLAIM: \"$query\"\n\n" +
+                    "EVIDENCE FOUND:\n$evidencePrompt\n\n" +
+                    "Analyze the evidence and provide the fact check response."
+
+                val llmReq = LlmRequest(
+                    systemPrompt = factCheckSysPrompt,
+                    userPrompt = factCheckUserPrompt,
+                    jsonOutput = false,
+                    temperature = 0.1
+                )
+
+                emit(KhojChatState.Generating)
+                val generatedResponse = llmOrchestrator.generateFallback(llmReq)
+                if (generatedResponse.isNotBlank()) {
+                    finalResult = GeminiChatResult(
+                        text = generatedResponse,
+                        sources = factCheckSources
                     )
+                }
+            } catch (e: Exception) {
+                Log.w(tag, "Full factcheck pipeline in KhojChat failed, falling back: ${e.message}")
+            }
 
-                    val generatedResponse = llmOrchestrator.generateFallback(llmReq)
-                    if (generatedResponse.isNotBlank()) {
-                        finalResult = GeminiChatResult(
-                            text = generatedResponse,
-                            sources = factCheckSources
-                        )
-                    }
-                } catch (e: Exception) {
-                    Log.w(tag, "Full factcheck pipeline in KhojChat failed, falling back: ${e.message}")
+            // Fallback for Fact-Check: Primary /tinyfish/search, Fallback /degoog
+            if (finalResult == null) {
+                val webSources = searchWithTinyFishAndDegoogFallback(query)
+                val allSources = (scrapedSources + webSources).distinctBy { it.url }
+                val groundedInstruction = if (allSources.isNotEmpty()) {
+                    appendSourcesToSystemInstruction(fullSystemInstruction, allSources)
+                } else {
+                    fullSystemInstruction
+                }
+                emit(KhojChatState.Generating)
+                val res = callGeminiApi(apiKey, contentsArray, groundedInstruction, temperature, useGoogleSearchTool = false)
+                if (res != null) {
+                    finalResult = res.copy(sources = allSources)
                 }
             }
 
-            // 1. Fallback / Citizen Service: LangSearch 2
+            // Safety net: Direct generation via multi-tier LLM cascade
             if (finalResult == null) {
-                Log.d(tag, "Citizen/Fact-Check Fallback 1: Querying LangSearch 2")
-                val langSources = searchLangSearch(query, langSearchKey2)
-                if (langSources.isNotEmpty()) {
-                    val groundedInstruction = appendSourcesToSystemInstruction(fullSystemInstruction, langSources)
-                    val res = callGeminiApi(apiKey, contentsArray, groundedInstruction, temperature, useGoogleSearchTool = false)
-                    if (res != null) {
-                        finalResult = res.copy(sources = langSources)
-                    }
-                }
-            }
-
-            // 2. Fallback 2: Gemini Google Search Grounding
-            if (finalResult == null) {
-                Log.d(tag, "Citizen/Fact-Check Fallback 2: Trying Gemini Google Search Grounding")
-                try {
-                    finalResult = callGeminiApi(apiKey, contentsArray, fullSystemInstruction, temperature, useGoogleSearchTool = true)
-                } catch (e: Exception) {
-                    Log.w(tag, "Gemini Google Search Grounding failed: ${e.message}")
-                }
-            }
-
-            // 3. Fallback 3: SearXNG (reusing SearxngHelper.baseUrls)
-            if (finalResult == null) {
-                Log.d(tag, "Citizen/Fact-Check Fallback 3: Querying SearXNG clusters")
-                val searxSources = searchSearXNG(query)
-                if (searxSources.isNotEmpty()) {
-                    val groundedInstruction = appendSourcesToSystemInstruction(fullSystemInstruction, searxSources)
-                    val res = callGeminiApi(apiKey, contentsArray, groundedInstruction, temperature, useGoogleSearchTool = false)
-                    if (res != null) {
-                        finalResult = res.copy(sources = searxSources)
-                    }
-                }
-            }
-
-            // 4. Safety net: Direct generation via multi-tier LLM cascade
-            if (finalResult == null) {
-                Log.d(tag, "Citizen/Fact-Check Safety net: Direct generation via LLM Orchestrator")
                 try {
                     val fallbackReq = LlmRequest(
                         systemPrompt = fullSystemInstruction,
@@ -877,7 +1304,7 @@ class KhojChatEngine(private val context: Context) {
                     )
                     val generated = llmOrchestrator.generateFallback(fallbackReq)
                     if (generated.isNotBlank()) {
-                        finalResult = GeminiChatResult(text = generated, sources = emptyList())
+                        finalResult = GeminiChatResult(text = generated, sources = scrapedSources)
                     }
                 } catch (_: Exception) {
                     finalResult = callGeminiApi(apiKey, contentsArray, fullSystemInstruction, temperature, useGoogleSearchTool = false)
@@ -891,17 +1318,18 @@ class KhojChatEngine(private val context: Context) {
         }
 
         val rawText = finalResult.text
+        val sanitizedText = sanitizeChatResponse(rawText, query)
         var detectedVerdict: String? = null
         if (currentMode == "fact-check") {
             detectedVerdict = when {
-                rawText.contains("অসত্য", ignoreCase = true) || rawText.contains("মিথ্যা", ignoreCase = true) || rawText.contains("ভুয়া", ignoreCase = true) || rawText.contains(" গুজব", ignoreCase = true) || rawText.contains("FALSE", ignoreCase = true) -> "false"
-                (rawText.contains("সত্য", ignoreCase = true) && !rawText.contains("আংশিক", ignoreCase = true) && !rawText.contains("অসত্য", ignoreCase = true)) || rawText.contains("TRUE", ignoreCase = true) -> "true"
+                sanitizedText.contains("অসত্য", ignoreCase = true) || sanitizedText.contains("মিথ্যা", ignoreCase = true) || sanitizedText.contains("ভুয়া", ignoreCase = true) || sanitizedText.contains(" গুজব", ignoreCase = true) || sanitizedText.contains("FALSE", ignoreCase = true) -> "false"
+                (sanitizedText.contains("সত্য", ignoreCase = true) && !sanitizedText.contains("আংশিক", ignoreCase = true) && !sanitizedText.contains("অসত্য", ignoreCase = true)) || sanitizedText.contains("TRUE", ignoreCase = true) -> "true"
                 else -> "misleading" // Strict 3 verdicts: true, false, misleading
             }
         }
 
         emit(KhojChatState.Success(
-            responseText = rawText,
+            responseText = sanitizedText,
             verdict = detectedVerdict,
             sources = finalResult.sources,
             autoSwitchedToFactCheck = autoSwitched

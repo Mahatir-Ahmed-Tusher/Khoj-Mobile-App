@@ -84,6 +84,8 @@ class FactCheckViewModel(application: Application) : AndroidViewModel(applicatio
     fun createNewSession() = khojChatRepository.createNewSession()
     fun loadSession(sessionId: String) = khojChatRepository.loadSession(sessionId)
     fun deleteSession(sessionId: String) = khojChatRepository.deleteSession(sessionId)
+    fun renameSession(sessionId: String, newTitle: String) = khojChatRepository.renameSession(sessionId, newTitle)
+    fun togglePinSession(sessionId: String) = khojChatRepository.togglePinSession(sessionId)
     fun clearAllSessions() = khojChatRepository.clearAllSessions()
     fun sendChatMessage(text: String, imageUri: String? = null, onAutoSwitched: () -> Unit = {}) = khojChatRepository.sendChatMessage(text, imageUri, onAutoSwitched)
     fun retryLastChatMessage(onAutoSwitched: () -> Unit = {}) = khojChatRepository.retryLastChatMessage(onAutoSwitched)

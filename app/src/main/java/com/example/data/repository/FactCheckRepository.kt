@@ -29,6 +29,8 @@ class FactCheckRepository(private val context: Context) {
     private val cmsDao = database.cmsArticleDao()
     private val engine = FactCheckEngine(context)
 
+    private val repositoryScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+
     // Expose local reports reactively
     val allReports: Flow<List<FactCheckReport>> = dao.getAllReports()
 
@@ -48,63 +50,65 @@ class FactCheckRepository(private val context: Context) {
                 val finalProgress = if (progress is FactCheckProgress.Success) {
                     val currentUserId = AuthRepository.currentUserId
 
-                    // 1. Save to local database (Immediate UI feedback)
+                    // 1. Save to local database (Immediate UI feedback with 0ms delay)
                     val localReport = progress.report.copy(
                         userId = currentUserId,
                         isPublic = true
                     )
                     dao.insertReport(localReport)
 
-                    // 2. Sync to Supabase (Sequential within this flow)
+                    // 2. Sync to Supabase asynchronously in background (Non-blocking)
                     if (!currentUserId.isNullOrEmpty()) {
-                        runCatching {
-                            // Ensure user profile exists in public.users table to satisfy FK constraint
-                            val currentUser = AuthRepository.getCurrentUser()
-                            if (currentUser != null) {
-                                AuthRepository.upsertProfile(
-                                    displayName = currentUser.displayName,
-                                    email = currentUser.email ?: "",
-                                    photoUrl = currentUser.photoUrl
-                                )
-                            }
+                        repositoryScope.launch {
+                            runCatching {
+                                // Ensure user profile exists in public.users table to satisfy FK constraint
+                                val currentUser = AuthRepository.getCurrentUser()
+                                if (currentUser != null) {
+                                    AuthRepository.upsertProfile(
+                                        displayName = currentUser.displayName,
+                                        email = currentUser.email ?: "",
+                                        photoUrl = currentUser.photoUrl
+                                    )
+                                }
 
-                            val safeVerdict = normalizeVerdictForDB(progress.report.verdict)
-                            val localSources = engine.deserializeSources(progress.report.sourcesJson)
-                            val supabaseSources = localSources.map { s ->
-                                com.example.data.model.SupabaseSource(
-                                    url = s.url,
-                                    title = s.title,
-                                    snippet = s.snippet,
-                                    tier = s.credibilityTier
+                                val safeVerdict = normalizeVerdictForDB(progress.report.verdict)
+                                val localSources = engine.deserializeSources(progress.report.sourcesJson)
+                                val supabaseSources = localSources.map { s ->
+                                    com.example.data.model.SupabaseSource(
+                                        url = s.url,
+                                        title = s.title,
+                                        snippet = s.snippet,
+                                        tier = s.credibilityTier
+                                    )
+                                }
+                                val supabaseReport = SupabaseReportInsert(
+                                    id = progress.report.id,
+                                    userId = currentUserId,
+                                    originalQuery = progress.report.claimText,
+                                    verdict = safeVerdict,
+                                    confidenceScore = progress.report.confidence.toDouble() / 100.0,
+                                    language = if (responseLanguage == ResponseLanguage.ENGLISH) "en" else "bn",
+                                    reportContent = progress.report.summaryBn,
+                                    sources = supabaseSources,
+                                    isPublic = true
                                 )
-                            }
-                            val supabaseReport = SupabaseReportInsert(
-                                id = progress.report.id,
-                                userId = currentUserId,
-                                originalQuery = progress.report.claimText,
-                                verdict = safeVerdict,
-                                confidenceScore = progress.report.confidence.toDouble() / 100.0,
-                                language = if (responseLanguage == ResponseLanguage.ENGLISH) "en" else "bn",
-                                reportContent = progress.report.summaryBn,
-                                sources = supabaseSources,
-                                isPublic = true
-                            )
-                            com.example.data.api.KhojSupabaseClient.client
-                                .postgrest["factcheck_reports"]
-                                .insert(supabaseReport)
+                                com.example.data.api.KhojSupabaseClient.client
+                                    .postgrest["factcheck_reports"]
+                                    .insert(supabaseReport)
 
-                            // Insert into user_search_history for cross-platform profile syncing
-                            val searchHistory = UserSearchHistoryInsert(
-                                userId = currentUserId,
-                                query = progress.report.claimText,
-                                searchType = "factcheck",
-                                reportId = progress.report.id
-                            )
-                            com.example.data.api.KhojSupabaseClient.client
-                                .postgrest["user_search_history"]
-                                .insert(searchHistory)
-                        }.onFailure { e ->
-                            android.util.Log.e("FactCheckRepository", "Failed to sync to Supabase: ${e.message}")
+                                // Insert into user_search_history for cross-platform profile syncing
+                                val searchHistory = UserSearchHistoryInsert(
+                                    userId = currentUserId,
+                                    query = progress.report.claimText,
+                                    searchType = "factcheck",
+                                    reportId = progress.report.id
+                                )
+                                com.example.data.api.KhojSupabaseClient.client
+                                    .postgrest["user_search_history"]
+                                    .insert(searchHistory)
+                            }.onFailure { e ->
+                                android.util.Log.e("FactCheckRepository", "Failed to sync to Supabase in background: ${e.message}")
+                            }
                         }
                     }
                     FactCheckProgress.Success(localReport)

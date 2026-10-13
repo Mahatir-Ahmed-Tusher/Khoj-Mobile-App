@@ -46,9 +46,9 @@ class LlmOrchestrator(
         val mistralKey = getApiKey("mistral_api_key", BuildConfig.MISTRAL_API_KEY)
 
         if (isForPlanning) {
-            // Planning: Groq -> Mistral 3 8B -> Z.AI -> Gemini
-            if (isValidKey(groqKey)) list.add(GroqLlmProvider(groqKey))
+            // Planning: Prioritize Mistral ministral-8b-latest, then Groq, Z.AI, Gemini
             if (isValidKey(mistralKey)) list.add(MistralLlmProvider(mistralKey))
+            if (isValidKey(groqKey)) list.add(GroqLlmProvider(groqKey))
             if (isValidKey(zaiKey)) list.add(ZaiLlmProvider(zaiKey))
             if (isValidKey(geminiKey)) list.add(GeminiLlmProvider(geminiKey))
         } else {

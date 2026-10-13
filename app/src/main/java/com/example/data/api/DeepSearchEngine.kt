@@ -87,9 +87,14 @@ class DeepSearchEngine(private var context: Context? = null) {
         val evidencePrompt = CitationEngine.buildEvidencePrompt(citations)
         send(DeepSearchProgress.GeneratingReport(topSources.size))
 
+        val languageInstruction = context?.let { ctx ->
+            ResponseLanguageManager(ctx).getLanguageInstructionPrompt()
+        } ?: ""
+
         val llmReq = LlmRequest(
             systemPrompt = DeepSearchPrompt.SYSTEM_PROMPT +
-                    "\n\nYOUR TASK:\nReturn ONLY the markdown report. Use proper Markdown headings.",
+                    (if (languageInstruction.isNotBlank()) "\n\n$languageInstruction\n\n" else "\n\n") +
+                    "YOUR TASK:\nReturn ONLY the markdown report. Use proper Markdown headings.",
             userPrompt = "RESEARCH QUERY: \"$query\"\n\nEVIDENCE FOUND:\n$evidencePrompt\n\n" +
                     "Analyze the evidence and generate the research report.",
             jsonOutput = false,

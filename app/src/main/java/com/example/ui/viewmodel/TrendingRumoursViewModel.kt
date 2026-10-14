@@ -1,6 +1,8 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
+import android.content.SharedPreferences
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.TrendingRegion
@@ -19,8 +21,8 @@ sealed class TrendingRumoursState {
 
 class TrendingRumoursViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val settingsPrefs = application.getSharedPreferences("khoj_settings", android.content.Context.MODE_PRIVATE)
-    private val cachePrefs = application.getSharedPreferences("trending_rumours_prefs", android.content.Context.MODE_PRIVATE)
+    private val settingsPrefs = application.getSharedPreferences("khoj_settings", Context.MODE_PRIVATE)
+    private val cachePrefs = application.getSharedPreferences("trending_rumours_prefs", Context.MODE_PRIVATE)
     private val repository = TrendingRumoursRepository(cachePrefs)
 
     private val _uiState = MutableStateFlow<TrendingRumoursState>(TrendingRumoursState.Loading)
@@ -29,14 +31,27 @@ class TrendingRumoursViewModel(application: Application) : AndroidViewModel(appl
     private var cachedList: List<TrendingRumourUi>? = null
     private var activeRegion: TrendingRegion = currentRegion()
 
+    private val cacheListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == "trending_rumours_cache_${activeRegion.name}") {
+            val freshCache = repository.getCachedRumours(activeRegion)
+            if (freshCache.isNotEmpty() && freshCache != cachedList) {
+                cachedList = freshCache
+                _uiState.value = TrendingRumoursState.Success(freshCache)
+            }
+        }
+    }
+
     init {
+        cachePrefs.registerOnSharedPreferenceChangeListener(cacheListener)
+
         val region = activeRegion
         val localCache = repository.getCachedRumours(region)
         if (localCache.isNotEmpty()) {
             cachedList = localCache
             _uiState.value = TrendingRumoursState.Success(localCache)
         }
-        
+
+        // Auto-fetch fresh rumours in background on startup without blocking the user
         fetchTrendingRumours(isBackgroundSync = true)
     }
 
@@ -65,6 +80,21 @@ class TrendingRumoursViewModel(application: Application) : AndroidViewModel(appl
         fetchTrendingRumours(isBackgroundSync = localCache.isNotEmpty())
     }
 
+    /**
+     * Automatic freshness sync: called on screen view / resume.
+     * If cache is older than 10 minutes, silently triggers a background fetch without showing skeletons.
+     */
+    fun autoSyncIfNeeded(force: Boolean = false) {
+        val lastSync = repository.getLastSyncTime(activeRegion)
+        val staleThresholdMs = 10 * 60 * 1000L // 10 minutes
+        val isStale = (System.currentTimeMillis() - lastSync) > staleThresholdMs
+        val isCacheEmpty = cachedList.isNullOrEmpty()
+
+        if (force || isStale || isCacheEmpty) {
+            fetchTrendingRumours(isBackgroundSync = !isCacheEmpty)
+        }
+    }
+
     fun fetchTrendingRumours(isBackgroundSync: Boolean = false) {
         val region = activeRegion
         if (!isBackgroundSync && _uiState.value !is TrendingRumoursState.Success) {
@@ -73,10 +103,14 @@ class TrendingRumoursViewModel(application: Application) : AndroidViewModel(appl
         viewModelScope.launch {
             try {
                 val rumours = repository.fetchTrendingRumours(region)
-                cachedList = rumours
-                _uiState.value = TrendingRumoursState.Success(rumours)
+                if (rumours.isNotEmpty()) {
+                    cachedList = rumours
+                    _uiState.value = TrendingRumoursState.Success(rumours)
+                } else if (cachedList.isNullOrEmpty()) {
+                    _uiState.value = TrendingRumoursState.Success(emptyList())
+                }
             } catch (e: Exception) {
-                // Only show error state if we don't have a cache, otherwise just log or ignore
+                // If we already have cached data, retain it gracefully
                 if (cachedList.isNullOrEmpty()) {
                     _uiState.value = TrendingRumoursState.Error(
                         message = e.localizedMessage ?: "Failed to fetch trending rumours",
@@ -91,5 +125,10 @@ class TrendingRumoursViewModel(application: Application) : AndroidViewModel(appl
     fun refresh() {
         _uiState.value = TrendingRumoursState.Loading
         fetchTrendingRumours(isBackgroundSync = false)
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        cachePrefs.unregisterOnSharedPreferenceChangeListener(cacheListener)
     }
 }

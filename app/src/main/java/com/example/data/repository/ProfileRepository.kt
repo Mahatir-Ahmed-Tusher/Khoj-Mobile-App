@@ -28,21 +28,62 @@ object ProfileRepository {
         runCatching {
             val userId = AuthRepository.currentUserId ?: throw Exception("User not authenticated")
             
-            // 1. Delete search history entry
-            client.postgrest["user_search_history"]
-                .delete {
-                    filter {
-                        eq("id", id)
-                        eq("user_id", userId)
-                    }
-                }
-
-            // 2. If a report is linked, erase from factcheck_reports and deep_search_reports
+            // Delete post interactions first to satisfy FK constraints
             if (!reportId.isNullOrBlank()) {
+                runCatching {
+                    client.postgrest["post_likes"].delete { filter { eq("post_id", reportId) } }
+                }
+                runCatching {
+                    client.postgrest["post_comments"].delete { filter { eq("post_id", reportId) } }
+                }
+            }
+            runCatching {
+                client.postgrest["post_likes"].delete { filter { eq("post_id", id) } }
+            }
+            runCatching {
+                client.postgrest["post_comments"].delete { filter { eq("post_id", id) } }
+            }
+
+            // 1. Delete search history entry (match by id, report_id, or query)
+            runCatching {
+                client.postgrest["user_search_history"]
+                    .delete {
+                        filter {
+                            eq("id", id)
+                            eq("user_id", userId)
+                        }
+                    }
+            }
+            if (!reportId.isNullOrBlank()) {
+                runCatching {
+                    client.postgrest["user_search_history"]
+                        .delete {
+                            filter {
+                                eq("report_id", reportId)
+                                eq("user_id", userId)
+                            }
+                        }
+                }
+            }
+            if (query.isNotBlank()) {
+                runCatching {
+                    client.postgrest["user_search_history"]
+                        .delete {
+                            filter {
+                                eq("query", query)
+                                eq("user_id", userId)
+                            }
+                        }
+                }
+            }
+
+            // 2. Erase from factcheck_reports and deep_search_reports
+            val targetIds = listOfNotNull(reportId, id).distinct()
+            targetIds.forEach { tid ->
                 runCatching {
                     client.postgrest["factcheck_reports"].delete {
                         filter {
-                            eq("id", reportId)
+                            eq("id", tid)
                             eq("user_id", userId)
                         }
                     }
@@ -50,7 +91,7 @@ object ProfileRepository {
                 runCatching {
                     client.postgrest["deep_search_reports"].delete {
                         filter {
-                            eq("id", reportId)
+                            eq("id", tid)
                             eq("user_id", userId)
                         }
                     }

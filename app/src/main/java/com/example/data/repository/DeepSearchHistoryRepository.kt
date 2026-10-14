@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.data.api.KhojSupabaseClient
 import com.example.data.model.DeepSearchReport
@@ -58,6 +59,7 @@ class DeepSearchHistoryRepository(private val context: Context) {
     companion object {
         private const val TAG = "DeepSearchHistoryRepo"
         private val HISTORY_KEY = stringPreferencesKey("deep_search_reports_json")
+        private val DELETED_IDS_KEY = stringSetPreferencesKey("deep_search_deleted_ids")
         private const val MAX_HISTORY_ITEMS = 150
 
         @Volatile
@@ -137,6 +139,10 @@ class DeepSearchHistoryRepository(private val context: Context) {
         runCatching {
             android.util.Log.d(TAG, "[DeepSearch:Sync] Starting sync for user: $userId")
             
+            // 0. Read deleted IDs set to prevent resurrection of deleted reports
+            val preferencesSnapshot = context.deepSearchHistoryDataStore.data.first()
+            val deletedIds = preferencesSnapshot[DELETED_IDS_KEY] ?: emptySet()
+
             // 1. Fetch remote reports
             val remoteRows = runCatching {
                 KhojSupabaseClient.client.postgrest.rpc(
@@ -160,7 +166,8 @@ class DeepSearchHistoryRepository(private val context: Context) {
 
             android.util.Log.d(TAG, "[DeepSearch:Sync] Retrieved ${remoteRows.size} remote rows from Supabase")
 
-            val mappedRemoteReports = remoteRows.map { row ->
+            val mappedRemoteReports = remoteRows.mapNotNull { row ->
+                if (row.id in deletedIds) return@mapNotNull null
                 val timestampMs = try {
                     java.time.Instant.parse(row.created_at).toEpochMilli()
                 } catch (_: Exception) {
@@ -180,11 +187,11 @@ class DeepSearchHistoryRepository(private val context: Context) {
             }
 
             // 2. Read existing local reports
-            val currentLocalReports = historyFlow.first()
+            val currentLocalReports = historyFlow.first().filter { it.id !in deletedIds }
             val remoteIdSet = mappedRemoteReports.map { it.id }.toSet()
 
             // 3. Find local reports that need uploading to Supabase (e.g. created while offline/guest)
-            val unsyncedLocalReports = currentLocalReports.filter { it.id !in remoteIdSet }
+            val unsyncedLocalReports = currentLocalReports.filter { it.id !in remoteIdSet && it.id !in deletedIds }
             if (unsyncedLocalReports.isNotEmpty()) {
                 android.util.Log.d(TAG, "[DeepSearch:Sync] Uploading ${unsyncedLocalReports.size} unsynced local reports to Supabase")
                 unsyncedLocalReports.forEach { localReport ->
@@ -229,8 +236,13 @@ class DeepSearchHistoryRepository(private val context: Context) {
 
         android.util.Log.d(TAG, "[DeepSearch:Save] Saving report ${report.id} for query: '${report.query.take(30)}...'")
 
-        // 1. Optimistically write to local DataStore cache
+        // 1. Optimistically write to local DataStore cache and remove from deleted set if re-saved
         context.deepSearchHistoryDataStore.edit { preferences ->
+            val deletedIds = (preferences[DELETED_IDS_KEY] ?: emptySet()).toMutableSet()
+            if (deletedIds.remove(report.id)) {
+                preferences[DELETED_IDS_KEY] = deletedIds
+            }
+
             val rawJson = preferences[HISTORY_KEY]
             val currentList = if (rawJson.isNullOrBlank()) {
                 mutableListOf()
@@ -300,6 +312,48 @@ class DeepSearchHistoryRepository(private val context: Context) {
                     }
                 )
                 android.util.Log.d(TAG, "[DeepSearch:Save] Successfully persisted report ${report.id} to Supabase deep_search_reports")
+
+                // If public, mirror to factcheck_reports so it is immediately visible in the Feed
+                if (report.isPublic) {
+                    runCatching {
+                        val feedSources = report.sources.map { s ->
+                            com.example.data.model.SupabaseSource(
+                                url = s.url,
+                                title = s.title,
+                                snippet = s.snippet,
+                                tier = 1
+                            )
+                        }
+                        val feedReportInsert = com.example.data.model.SupabaseReportInsert(
+                            id = report.id,
+                            userId = userId,
+                            originalQuery = report.query,
+                            processedQuery = report.query,
+                            verdict = "deepsearch",
+                            confidenceScore = 1.0,
+                            modelVersion = "deepsearch",
+                            language = "bn",
+                            status = "completed",
+                            reportContent = report.reportContent,
+                            sources = feedSources,
+                            isPublic = true
+                        )
+                        KhojSupabaseClient.client.postgrest["factcheck_reports"].upsert(feedReportInsert)
+                        android.util.Log.d(TAG, "[DeepSearch:Save] Successfully mirrored public DeepSearch report to factcheck_reports for Feed")
+                    }.onFailure { fe ->
+                        android.util.Log.w(TAG, "[DeepSearch:Save] Non-fatal: Failed to mirror to factcheck_reports: ${fe.message}")
+                    }
+                } else {
+                    // If private, ensure it is completely removed from factcheck_reports
+                    runCatching {
+                        KhojSupabaseClient.client.postgrest["factcheck_reports"].delete {
+                            filter {
+                                eq("id", report.id)
+                                eq("user_id", userId)
+                            }
+                        }
+                    }
+                }
 
                 // Also record the search query in user_search_history so it appears in unified profile history
                 runCatching {
@@ -386,6 +440,10 @@ class DeepSearchHistoryRepository(private val context: Context) {
     suspend fun deleteReport(id: String) = withContext(Dispatchers.IO) {
         android.util.Log.d(TAG, "[DeepSearch:Delete] Deleting report $id")
         context.deepSearchHistoryDataStore.edit { preferences ->
+            val deletedIds = (preferences[DELETED_IDS_KEY] ?: emptySet()).toMutableSet()
+            deletedIds.add(id)
+            preferences[DELETED_IDS_KEY] = deletedIds
+
             val rawJson = preferences[HISTORY_KEY] ?: return@edit
             try {
                 val currentList = json.decodeFromString<List<DeepSearchReport>>(rawJson).toMutableList()
@@ -397,20 +455,51 @@ class DeepSearchHistoryRepository(private val context: Context) {
         val userId = AuthRepository.currentUserId
         if (userId != null) {
             runCatching {
-                KhojSupabaseClient.client.postgrest["deep_search_reports"]
-                    .delete {
-                        filter {
-                            eq("id", id)
-                            eq("user_id", userId)
+                // Delete child relations first to satisfy FK constraints
+                runCatching {
+                    KhojSupabaseClient.client.postgrest["post_likes"]
+                        .delete { filter { eq("post_id", id) } }
+                }
+                runCatching {
+                    KhojSupabaseClient.client.postgrest["post_comments"]
+                        .delete { filter { eq("post_id", id) } }
+                }
+                runCatching {
+                    KhojSupabaseClient.client.postgrest["user_search_history"]
+                        .delete {
+                            filter {
+                                eq("report_id", id)
+                                eq("user_id", userId)
+                            }
                         }
-                    }
-                KhojSupabaseClient.client.postgrest["user_search_history"]
-                    .delete {
-                        filter {
-                            eq("report_id", id)
-                            eq("user_id", userId)
+                }
+                runCatching {
+                    KhojSupabaseClient.client.postgrest["user_search_history"]
+                        .delete {
+                            filter {
+                                eq("id", id)
+                                eq("user_id", userId)
+                            }
                         }
-                    }
+                }
+                runCatching {
+                    KhojSupabaseClient.client.postgrest["deep_search_reports"]
+                        .delete {
+                            filter {
+                                eq("id", id)
+                                eq("user_id", userId)
+                            }
+                        }
+                }
+                runCatching {
+                    KhojSupabaseClient.client.postgrest["factcheck_reports"]
+                        .delete {
+                            filter {
+                                eq("id", id)
+                                eq("user_id", userId)
+                            }
+                        }
+                }
             }.onFailure { e ->
                 android.util.Log.e(TAG, "[DeepSearch:Delete] Failed to erase remote report: ${e.message}")
             }
@@ -430,6 +519,20 @@ class DeepSearchHistoryRepository(private val context: Context) {
                     .delete {
                         filter {
                             eq("user_id", userId)
+                        }
+                    }
+                KhojSupabaseClient.client.postgrest["user_search_history"]
+                    .delete {
+                        filter {
+                            eq("user_id", userId)
+                            eq("search_type", "deepsearch")
+                        }
+                    }
+                KhojSupabaseClient.client.postgrest["factcheck_reports"]
+                    .delete {
+                        filter {
+                            eq("user_id", userId)
+                            eq("verdict", "deepsearch")
                         }
                     }
             }.onFailure { e ->

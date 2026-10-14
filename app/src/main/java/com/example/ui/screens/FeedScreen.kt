@@ -593,14 +593,28 @@ fun DeepSearchFeedCard(
     onShare: () -> Unit,
     onSelectDeepSearchReport: (DeepSearchReport) -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val deepSearchReport = remember(item.report) { item.report.toDeepSearchReport(isFeedPreview = true) }
     val sourceCount = deepSearchReport.sources.size
 
+    val handleSelect = {
+        coroutineScope.launch {
+            val deepRepo = com.example.data.repository.DeepSearchHistoryRepository.getInstance(context)
+            val fullReport = deepRepo.fetchReportById(item.report.id) ?: deepRepo.getReportById(item.report.id)
+            if (fullReport != null && fullReport.reportContent.isNotBlank()) {
+                onSelectDeepSearchReport(fullReport)
+            } else {
+                onSelectDeepSearchReport(deepSearchReport)
+            }
+        }
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onSelectDeepSearchReport(deepSearchReport) },
+            .clickable { handleSelect() },
         shape = androidx.compose.ui.graphics.RectangleShape,
         colors = CardDefaults.cardColors(
             containerColor = if (isDark) MaterialTheme.colorScheme.background else Color.White
@@ -792,11 +806,26 @@ fun ReportFeedCard(
     onShare: () -> Unit,
     onSelectReport: (FactCheckReport) -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+
+    val handleSelectReport = {
+        coroutineScope.launch {
+            val dbRepo = com.example.data.repository.FactCheckRepository(context)
+            val local = dbRepo.getReportById(item.report.id)
+            if (local != null && !local.markdownReport.isNullOrBlank()) {
+                onSelectReport(local)
+            } else {
+                onSelectReport(item.report.toFactCheckReport())
+            }
+        }
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onSelectReport(item.report.toFactCheckReport()) },
+            .clickable { handleSelectReport() },
         shape = androidx.compose.ui.graphics.RectangleShape,
         colors = CardDefaults.cardColors(
             containerColor = if (isDark) MaterialTheme.colorScheme.background else Color.White
@@ -889,9 +918,7 @@ fun ReportFeedCard(
                             fontSize = 13.sp,
                             color = SlatePrimary,
                             modifier = Modifier
-                                .clickable {
-                                    onSelectReport(item.report.toFactCheckReport())
-                                }
+                                .clickable { handleSelectReport() }
                                 .padding(vertical = 2.dp)
                         )
                     }

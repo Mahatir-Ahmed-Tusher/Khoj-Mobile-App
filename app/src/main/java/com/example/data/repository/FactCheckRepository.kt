@@ -81,6 +81,8 @@ class FactCheckRepository(private val context: Context) {
                                         tier = s.credibilityTier
                                     )
                                 }
+                                val fullMarkdownContent = progress.report.markdownReport?.takeIf { it.isNotBlank() }
+                                    ?: progress.report.getEffectiveMarkdown()
                                 val supabaseReport = SupabaseReportInsert(
                                     id = progress.report.id,
                                     userId = currentUserId,
@@ -88,7 +90,7 @@ class FactCheckRepository(private val context: Context) {
                                     verdict = safeVerdict,
                                     confidenceScore = progress.report.confidence.toDouble() / 100.0,
                                     language = if (responseLanguage == ResponseLanguage.ENGLISH) "en" else "bn",
-                                    reportContent = progress.report.summaryBn,
+                                    reportContent = fullMarkdownContent,
                                     sources = supabaseSources,
                                     isPublic = true
                                 )
@@ -133,27 +135,63 @@ class FactCheckRepository(private val context: Context) {
         return dao.getReportById(id)
     }
 
-    // Delete a report
+    // Delete a report permanently across all local and remote layers
     suspend fun deleteReport(id: String) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        // 1. Delete from local Room database
         dao.deleteReportById(id)
         
+        // 2. Delete from Supabase remote database with foreign key safety
         val userId = AuthRepository.currentUserId
         if (userId != null) {
             runCatching {
-                com.example.data.api.KhojSupabaseClient.client.postgrest["factcheck_reports"]
-                    .delete {
-                        filter {
-                            eq("id", id)
-                            eq("user_id", userId)
+                // Delete child relations first (likes, comments, search history) to satisfy FK constraints
+                runCatching {
+                    com.example.data.api.KhojSupabaseClient.client.postgrest["post_likes"]
+                        .delete { filter { eq("post_id", id) } }
+                }
+                runCatching {
+                    com.example.data.api.KhojSupabaseClient.client.postgrest["post_comments"]
+                        .delete { filter { eq("post_id", id) } }
+                }
+                runCatching {
+                    com.example.data.api.KhojSupabaseClient.client.postgrest["user_search_history"]
+                        .delete {
+                            filter {
+                                eq("report_id", id)
+                                eq("user_id", userId)
+                            }
                         }
-                    }
-                com.example.data.api.KhojSupabaseClient.client.postgrest["user_search_history"]
-                    .delete {
-                        filter {
-                            eq("report_id", id)
-                            eq("user_id", userId)
+                }
+                runCatching {
+                    com.example.data.api.KhojSupabaseClient.client.postgrest["user_search_history"]
+                        .delete {
+                            filter {
+                                eq("id", id)
+                                eq("user_id", userId)
+                            }
                         }
-                    }
+                }
+                // Delete parent reports
+                runCatching {
+                    com.example.data.api.KhojSupabaseClient.client.postgrest["factcheck_reports"]
+                        .delete {
+                            filter {
+                                eq("id", id)
+                                eq("user_id", userId)
+                            }
+                        }
+                }
+                runCatching {
+                    com.example.data.api.KhojSupabaseClient.client.postgrest["deep_search_reports"]
+                        .delete {
+                            filter {
+                                eq("id", id)
+                                eq("user_id", userId)
+                            }
+                        }
+                }
+            }.onFailure { e ->
+                android.util.Log.e("FactCheckRepository", "Error during remote report deletion: ${e.message}")
             }
         }
     }
@@ -171,6 +209,14 @@ class FactCheckRepository(private val context: Context) {
                             eq("user_id", userId)
                         }
                     }
+                com.example.data.api.KhojSupabaseClient.client.postgrest["factcheck_reports"]
+                    .delete {
+                        filter {
+                            eq("user_id", userId)
+                        }
+                    }
+            }.onFailure { e ->
+                android.util.Log.e("FactCheckRepository", "Error during remote history clear: ${e.message}")
             }
         }
     }
@@ -180,7 +226,7 @@ class FactCheckRepository(private val context: Context) {
         return engine.isCustomPipelineConfigured()
     }
 
-    // Fetch remote history reports from Supabase
+    // Fetch remote history reports from Supabase, prioritizing local Room entities when more complete
     suspend fun getRemoteHistoryReports(userId: String): List<FactCheckReport> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         runCatching {
             // 1. Fetch user search history list
@@ -208,66 +254,73 @@ class FactCheckRepository(private val context: Context) {
                 }
                 .decodeList<com.example.data.model.SupabaseReport>()
 
-            // 3. Map SupabaseReport entries to FactCheckReport entries
+            // 3. Map SupabaseReport entries to FactCheckReport entries, prioritizing local Room reports when available
             val reportsMap = remoteReports.associateBy { it.id }
             historyList.mapNotNull { history ->
                 reportsMap[history.reportId]?.let { supabaseReport ->
-                    // Serialize sources to JSON string format used by local model
-                    val sourcesArr = org.json.JSONArray()
-                    supabaseReport.sources?.forEach { element ->
-                        try {
-                            val obj = element.jsonObject
-                            val url = obj["url"]?.jsonPrimitive?.contentOrNull ?: ""
-                            val title = obj["title"]?.jsonPrimitive?.contentOrNull ?: ""
-                            val snippet = obj["snippet"]?.jsonPrimitive?.contentOrNull ?: ""
-                            val score = obj["credibilityScore"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull()
-                            val tier = if (score != null) {
-                                if (score >= 0.8) 1 else if (score >= 0.6) 2 else 3
-                            } else {
-                                obj["tier"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 3
+                    // Prioritize local Room database report if it has a complete markdown body
+                    val localReport = dao.getReportById(supabaseReport.id)
+                    if (localReport != null && !localReport.markdownReport.isNullOrBlank() &&
+                        localReport.markdownReport.length > (supabaseReport.reportContent?.length ?: 0)) {
+                        localReport
+                    } else {
+                        // Serialize sources to JSON string format used by local model
+                        val sourcesArr = org.json.JSONArray()
+                        supabaseReport.sources?.forEach { element ->
+                            try {
+                                val obj = element.jsonObject
+                                val url = obj["url"]?.jsonPrimitive?.contentOrNull ?: ""
+                                val title = obj["title"]?.jsonPrimitive?.contentOrNull ?: ""
+                                val snippet = obj["snippet"]?.jsonPrimitive?.contentOrNull ?: ""
+                                val score = obj["credibilityScore"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull()
+                                val tier = if (score != null) {
+                                    if (score >= 0.8) 1 else if (score >= 0.6) 2 else 3
+                                } else {
+                                    obj["tier"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 3
+                                }
+                                sourcesArr.put(org.json.JSONObject().apply {
+                                    put("title", title)
+                                    put("url", url)
+                                    put("snippet", snippet)
+                                    put("domain", try { java.net.URI(url).host ?: "" } catch(e: Exception) { "" })
+                                    put("credibilityTier", tier)
+                                    put("publishDate", "")
+                                })
+                            } catch (e: Exception) {
+                                // ignore malformed elements
                             }
-                            sourcesArr.put(org.json.JSONObject().apply {
-                                put("title", title)
-                                put("url", url)
-                                put("snippet", snippet)
-                                put("domain", try { java.net.URI(url).host ?: "" } catch(e: Exception) { "" })
-                                put("credibilityTier", tier)
-                                put("publishDate", "")
-                            })
-                        } catch (e: Exception) {
-                            // ignore malformed elements
                         }
-                    }
 
-                    FactCheckReport(
-                        id = supabaseReport.id,
-                        claimText = supabaseReport.processedQuery ?: supabaseReport.originalQuery,
-                        normalizedClaim = supabaseReport.processedQuery ?: supabaseReport.originalQuery,
-                        verdict = supabaseReport.verdict,
-                        confidence = (supabaseReport.confidenceScore * 100).toInt(),
-                        summaryBn = supabaseReport.reportContent ?: "",
-                        summaryEn = supabaseReport.reportContent ?: "",
-                        reasoningBn = supabaseReport.reportContent ?: "",
-                        reasoningEn = supabaseReport.reportContent ?: "",
-                        markdownReport = supabaseReport.reportContent, // For getEffectiveMarkdown()
-                        sourcesJson = sourcesArr.toString(),
-                        contradictingSourcesJson = "[]",
-                        isPublic = supabaseReport.isPublic ?: true,
-                        userId = supabaseReport.userId,
-                        timestamp = try {
-                            val isoString = history.createdAt ?: supabaseReport.createdAt
-                            if (isoString != null) {
-                                val cleanString = isoString.replace("Z", "+0000")
-                                val formatPattern = if (cleanString.contains(".")) "yyyy-MM-dd'T'HH:mm:ss.SSSZ" else "yyyy-MM-dd'T'HH:mm:ssZ"
-                                val sdf = java.text.SimpleDateFormat(formatPattern, java.util.Locale.US)
-                                sdf.parse(cleanString)?.time ?: System.currentTimeMillis()
-                            } else {
+                        FactCheckReport(
+                            id = supabaseReport.id,
+                            claimText = supabaseReport.processedQuery ?: supabaseReport.originalQuery,
+                            normalizedClaim = supabaseReport.processedQuery ?: supabaseReport.originalQuery,
+                            verdict = supabaseReport.verdict,
+                            confidence = (supabaseReport.confidenceScore * 100).toInt(),
+                            summaryBn = supabaseReport.reportContent ?: "",
+                            summaryEn = supabaseReport.reportContent ?: "",
+                            reasoningBn = supabaseReport.reportContent ?: "",
+                            reasoningEn = supabaseReport.reportContent ?: "",
+                            markdownReport = supabaseReport.reportContent,
+                            sourcesJson = sourcesArr.toString(),
+                            contradictingSourcesJson = "[]",
+                            isPublic = supabaseReport.isPublic ?: true,
+                            userId = supabaseReport.userId,
+                            timestamp = try {
+                                val isoString = history.createdAt ?: supabaseReport.createdAt
+                                if (isoString != null) {
+                                    val cleanString = isoString.replace("Z", "+0000")
+                                    val formatPattern = if (cleanString.contains(".")) "yyyy-MM-dd'T'HH:mm:ss.SSSZ" else "yyyy-MM-dd'T'HH:mm:ssZ"
+                                    val sdf = java.text.SimpleDateFormat(formatPattern, java.util.Locale.US)
+                                    sdf.parse(cleanString)?.time ?: System.currentTimeMillis()
+                                } else {
+                                    System.currentTimeMillis()
+                                }
+                            } catch (e: Throwable) {
                                 System.currentTimeMillis()
                             }
-                        } catch (e: Throwable) {
-                            System.currentTimeMillis()
-                        }
-                    )
+                        )
+                    }
                 }
             }
         }.getOrElse { e ->

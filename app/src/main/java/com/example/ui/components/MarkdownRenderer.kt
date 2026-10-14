@@ -23,6 +23,8 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.horizontalScroll
@@ -539,6 +541,13 @@ fun MarkdownText(
                         fontWeight = FontWeight.ExtraBold,
                         lineHeight = headingLineHeight,
                         color = displayTextColor,
+                        style = TextStyle(
+                            platformStyle = @Suppress("DEPRECATION") PlatformTextStyle(includeFontPadding = true),
+                            lineHeightStyle = LineHeightStyle(
+                                alignment = LineHeightStyle.Alignment.Center,
+                                trim = LineHeightStyle.Trim.None
+                            )
+                        ),
                         modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
                     )
                 }
@@ -551,7 +560,12 @@ fun MarkdownText(
                             fontFamily = fontToUse,
                             fontSize = fontSize.sp,
                             lineHeight = lineHeight.sp,
-                            color = displayTextColor
+                            color = displayTextColor,
+                            platformStyle = @Suppress("DEPRECATION") PlatformTextStyle(includeFontPadding = true),
+                            lineHeightStyle = LineHeightStyle(
+                                alignment = LineHeightStyle.Alignment.Center,
+                                trim = LineHeightStyle.Trim.None
+                            )
                         ),
                         onClick = { offset ->
                             // Check URL annotation first
@@ -642,7 +656,12 @@ fun MarkdownText(
                                 fontSize = fontSize.sp,
                                 fontStyle = FontStyle.Italic,
                                 lineHeight = lineHeight.sp,
-                                color = displayTextColor.copy(alpha = 0.85f)
+                                color = displayTextColor.copy(alpha = 0.85f),
+                                platformStyle = @Suppress("DEPRECATION") PlatformTextStyle(includeFontPadding = true),
+                                lineHeightStyle = LineHeightStyle(
+                                    alignment = LineHeightStyle.Alignment.Center,
+                                    trim = LineHeightStyle.Trim.None
+                                )
                             )
                         )
                     }
@@ -660,6 +679,13 @@ fun MarkdownText(
                                     fontSize = fontSize.sp,
                                     lineHeight = lineHeight.sp,
                                     color = displayTextColor,
+                                    style = TextStyle(
+                                        platformStyle = @Suppress("DEPRECATION") PlatformTextStyle(includeFontPadding = true),
+                                        lineHeightStyle = LineHeightStyle(
+                                            alignment = LineHeightStyle.Alignment.Center,
+                                            trim = LineHeightStyle.Trim.None
+                                        )
+                                    ),
                                     modifier = Modifier.width(16.dp)
                                 )
                                 val annotatedItem = parseInlineMarkdown(item, fontToUse, displayTextColor, linkColor)
@@ -669,7 +695,12 @@ fun MarkdownText(
                                         fontFamily = fontToUse,
                                         fontSize = fontSize.sp,
                                         lineHeight = lineHeight.sp,
-                                        color = displayTextColor
+                                        color = displayTextColor,
+                                        platformStyle = @Suppress("DEPRECATION") PlatformTextStyle(includeFontPadding = true),
+                                        lineHeightStyle = LineHeightStyle(
+                                            alignment = LineHeightStyle.Alignment.Center,
+                                            trim = LineHeightStyle.Trim.None
+                                        )
                                     ),
                                     onClick = { offset ->
                                         annotatedItem.getStringAnnotations(tag = "URL", start = offset, end = offset)
@@ -704,6 +735,13 @@ fun MarkdownText(
                                     fontSize = fontSize.sp,
                                     lineHeight = lineHeight.sp,
                                     color = displayTextColor,
+                                    style = TextStyle(
+                                        platformStyle = @Suppress("DEPRECATION") PlatformTextStyle(includeFontPadding = true),
+                                        lineHeightStyle = LineHeightStyle(
+                                            alignment = LineHeightStyle.Alignment.Center,
+                                            trim = LineHeightStyle.Trim.None
+                                        )
+                                    ),
                                     modifier = Modifier.width(22.dp)
                                 )
                                 val annotatedItem = parseInlineMarkdown(item, fontToUse, displayTextColor, linkColor)
@@ -713,7 +751,12 @@ fun MarkdownText(
                                         fontFamily = fontToUse,
                                         fontSize = fontSize.sp,
                                         lineHeight = lineHeight.sp,
-                                        color = displayTextColor
+                                        color = displayTextColor,
+                                        platformStyle = @Suppress("DEPRECATION") PlatformTextStyle(includeFontPadding = true),
+                                        lineHeightStyle = LineHeightStyle(
+                                            alignment = LineHeightStyle.Alignment.Center,
+                                            trim = LineHeightStyle.Trim.None
+                                        )
                                     ),
                                     onClick = { offset ->
                                         annotatedItem.getStringAnnotations(tag = "URL", start = offset, end = offset)

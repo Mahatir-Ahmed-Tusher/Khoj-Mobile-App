@@ -6,9 +6,10 @@ object FactCheckPrompt {
         val temporalBlock = if (currentDateStr.isNotBlank()) {
             """
             TEMPORAL GROUNDING & EVIDENCE PRIMACY:
-            1. REFERENCE DATE: $currentDateStr. You are evaluating this claim in the real world as of this date. Events, reports, and articles dated up to this reference date reflect actual current or historical events—NEVER dismiss them as "future dates" or "speculative".
-            2. EVIDENCE PRIMACY OVER PRE-TRAINED MEMORY: When retrieved search evidence documents verified facts, you MUST adopt them as the ground truth. Real-world facts, public roles, organizational titles, and status change over time. NEVER contradict credible search evidence based on outdated internal pre-trained memory.
-            3. STRICT NO-LEAK DIRECTIVE: Do NOT mention the reference date, system instructions, or the fact that you were provided a date in the generated report (e.g., do NOT write "As of [date]", "Today is...", or "According to my prompt"). Write naturally, objectively, and seamlessly from the perspective of an expert journalist.
+            1. REFERENCE DATE (ABSOLUTE GROUND TRUTH): $currentDateStr. You evaluate claims in the real world as of this current date. Events, reports, and articles dated up to this reference date reflect actual current or historical events—NEVER dismiss them as "future dates" or "speculative".
+            2. OVERRIDE OF STATIC TRAINING CUTOFF: Any internal pre-training knowledge cutoff (such as May 20, 2024) is completely obsolete. You must NEVER reject evidence or verified events because they occurred after May 2024.
+            3. EVIDENCE PRIMACY OVER PRE-TRAINED MEMORY: When retrieved search evidence documents verified facts and dates, you MUST adopt them as ground truth reality. Real-world facts, public roles, organizational titles, and status change over time. NEVER contradict credible search evidence based on outdated internal pre-trained memory.
+            4. STRICT NO-LEAK DIRECTIVE: Do NOT mention system instructions or the fact that you were provided a date in the generated report (e.g., do NOT write "According to my system prompt"). Write naturally, objectively, and seamlessly from the perspective of an expert journalist.
             """.trimIndent()
         } else {
             """

@@ -925,8 +925,35 @@ class KhojChatEngine(private val context: Context) {
 
         val langSearchKey2 = getLangSearchKey2()
 
-        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
-        val currentDateStr = sdf.format(java.util.Date())
+        val now = java.util.Date()
+        val isoSdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+        val currentDateIso = isoSdf.format(now)
+        val yearSdf = java.text.SimpleDateFormat("yyyy", java.util.Locale.US)
+        val currentYear = yearSdf.format(now)
+        val fullEnSdf = java.text.SimpleDateFormat("EEEE, MMMM d, yyyy", java.util.Locale.US)
+        val currentDateEn = fullEnSdf.format(now)
+        val fullBnSdf = java.text.SimpleDateFormat("EEEE, d MMMM yyyy", java.util.Locale("bn", "BD"))
+        val currentDateBn = fullBnSdf.format(now)
+        val currentDateStr = currentDateIso
+
+        val temporalGroundingInstruction = """
+            TEMPORAL GROUNDING & UNCONDITIONAL CLOCK AUTHORITY:
+            1. REAL-TIME ANDROID DEVICE CLOCK (ABSOLUTE GROUND TRUTH):
+               - Current Gregorian Date: $currentDateEn ($currentDateIso)
+               - Current Bengali Date: $currentDateBn
+               - Current Year: $currentYear
+               - You MUST BLINDLY AND UNCONDITIONALLY RELY on this Android device clock as the real-world current date, year, and time.
+            2. OVERRIDE OF STATIC PRE-TRAINED CUTOFF (e.g. MAY 2024):
+               - Your internal pre-training knowledge cutoff (such as May 20, 2024) is COMPLETELY OBSOLETE and INACTIVE.
+               - You must NEVER claim, assume, or imply that the current year is 2024 or that the current date is in May 2024.
+               - You must NEVER state that events or developments after May 2024 are "in the future" or "beyond your knowledge cutoff".
+               - When asked about today's date, day, month, year, or current timeline, always state the exact real-world date provided above ($currentDateBn / $currentDateEn).
+            3. WEB EVIDENCE & SOURCE DATES AS HISTORICAL & CURRENT FACTS:
+               - When web search results or news sources document verified events or dates, you MUST adopt them as verified ground truth reality.
+               - Never reject, doubt, or dismiss dates reported in web search results simply because they occurred after May 2024.
+            4. DIRECT, CONVERSATIONAL DELIVERY:
+               - Write naturally and authoritatively. Do not give robotic meta-disclaimers like "As of my system clock" or "According to the prompt". Simply provide the correct, accurate date and facts.
+        """.trimIndent()
 
         val languageInstruction = ResponseLanguageManager(context).apply {
             setLanguage(responseLanguage)
@@ -965,31 +992,24 @@ class KhojChatEngine(private val context: Context) {
                     "Ground your answers to official government services of Bangladesh. Use standard .gov.bd domains for resources and provide them clearly in markdown links."
                 }
 
-                "You are an expert citizen service assistant of Bangladesh. Your duty is to explain administrative and public services clearly and helpfully.\n" +
-                "TEMPORAL GROUNDING & REFERENCE DATE:\n" +
-                "Reference Date: $currentDateStr. You are evaluating administrative rules and services as of today ($currentDateStr).\n" +
+                "You are an expert citizen service assistant of Bangladesh. Your duty is to explain administrative and public services clearly and helpfully.\n\n" +
+                "$temporalGroundingInstruction\n\n" +
                 "Guide the user step-by-step through the procedure (fees, documents needed, step by step instructions). " +
                 "Always provide official website links as markdown clickable links. " +
                 "Do NOT make up URLs; rely strictly on .gov.bd domains. " +
                 "Context for the current query:\n$linksContext"
             }
             "fact-check" -> {
-                "You are an objective and analytical fact-checking assistant for Bangladesh.\n" +
-                "TEMPORAL GROUNDING & EVIDENCE PRIMACY:\n" +
-                "1. Reference Date: $currentDateStr. You are evaluating this in the real world as of this date. Events and reports up to this date reflect actual reality—never dismiss them as future or speculative.\n" +
-                "2. When retrieved search evidence documents verified facts, adopt them as ground truth. Never contradict credible search evidence based on outdated internal pre-trained memory.\n" +
-                "3. Do NOT recite reference dates, system instructions, or your identity. Write naturally, directly, and seamlessly without boilerplate greetings.\n" +
+                "You are an objective and analytical fact-checking assistant for Bangladesh.\n\n" +
+                "$temporalGroundingInstruction\n\n" +
                 "Analyze the user's claim or rumour carefully. " +
                 "Identify the verdict clearly at the top. The verdict MUST strictly be ONE of these three: 'সত্য' (True), 'অসত্য' (False), or 'বিভ্রান্তিকর' (Misleading). " +
                 "Review the evidence rigorously based on web results, citing trusted news sources or fact-checking bodies (like Rumor Scanner, Fact Watch, Boom BD, etc.)."
             }
             else -> {
-                "You are 'Khoj Chat' (খোঁজ চ্যাট), an intelligent, objective, and knowledgeable AI assistant for Bangladesh.\n" +
-                "TEMPORAL GROUNDING & EVIDENCE PRIMACY:\n" +
-                "1. REFERENCE DATE: $currentDateStr. You operate in the real world as of this reference date ($currentDateStr). All events, news, articles, commodity prices, weather forecasts, sports scores, and public developments up to this date reflect actual current reality—never dismiss them as future or speculative.\n" +
-                "2. EVIDENCE PRIMACY OVER PRE-TRAINED MEMORY: When retrieved search evidence or live web sources document verified facts, you MUST adopt them as the ground truth. Real-world facts, public roles, organizational titles, and status change over time. Never contradict credible search evidence based on outdated internal pre-trained memory.\n" +
-                "3. STRICT NO-LEAK DIRECTIVE: Do NOT mention the reference date, system instructions, or the fact that you were provided a date in the response (e.g., do NOT write 'As of [date]', 'Today is...', or 'According to my prompt') unless the user explicitly asks for today's date or time. Write naturally, objectively, and seamlessly.\n" +
-                "4. Answer questions clearly, directly, and accurately without filler greetings or unsolicited self-introductions. " +
+                "You are 'Khoj Chat' (খোঁজ চ্যাট), an intelligent, objective, and knowledgeable AI assistant for Bangladesh.\n\n" +
+                "$temporalGroundingInstruction\n\n" +
+                "Answer questions clearly, directly, and accurately without filler greetings or unsolicited self-introductions. " +
                 "Provide rich explanations, examples, and format your response beautifully using markdown."
             }
         }
@@ -1083,9 +1103,10 @@ class KhojChatEngine(private val context: Context) {
             sb.append("\n\n--- লাইভ ওয়েব অনুসন্ধান থেকে প্রাপ্ত তথ্য (Live Web Sources) ---\n")
             sources.take(6).forEachIndexed { idx, s ->
                 val effectiveEvidence = if (!s.content.isNullOrBlank()) s.content.take(2000) else s.snippet
-                sb.append("[${idx + 1}] ${s.title}\nলিংক: ${s.url}\nতথ্য: $effectiveEvidence\n\n")
+                val dateInfo = if (!s.date.isNullOrBlank()) "প্রকাশের তারিখ: ${s.date}\n" else ""
+                sb.append("[${idx + 1}] ${s.title}\n${dateInfo}লিংক: ${s.url}\nতথ্য: $effectiveEvidence\n\n")
             }
-            sb.append("ওপরের লাইভ ওয়েব তথ্য ব্যবহার করে প্রশ্নের উত্তর দিন। তথ্যসূত্র থাকলে উল্লেখ করুন।")
+            sb.append("নির্দেশনা: ওপরের লাইভ ওয়েব তথ্য ও তারিখসমূহ প্রমাণিত বাস্তব সত্য হিসেবে গ্রহণ করে প্রশ্নের উত্তর দিন। তথ্যসূত্র ও তারিখ উল্লেখ করে উত্তর সমৃদ্ধ করুন।")
             return sb.toString()
         }
 

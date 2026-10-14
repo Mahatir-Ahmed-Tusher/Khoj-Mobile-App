@@ -58,6 +58,7 @@ fun AllTrendingRumoursScreen(
 
     LaunchedEffect(isBn) {
         viewModel.onLanguageChanged(isBn)
+        viewModel.autoSyncIfNeeded()
     }
 
     val state by viewModel.uiState.collectAsState()

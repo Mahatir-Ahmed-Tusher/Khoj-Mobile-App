@@ -17,6 +17,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
+import com.example.data.model.RemoteDeepSearchReportDto
 import com.example.data.local.FeedDao
 import com.example.data.local.FeedItemEntity
 import kotlinx.serialization.encodeToString
@@ -149,6 +150,23 @@ object FeedRepository {
                             ).decodeList<FeedReportRpcResponse>()
                         }
 
+                        // 1b. Fetch public deep search reports (to ensure public deep searches appear)
+                        val deepReportsDeferred = async {
+                            runCatching {
+                                db["deep_search_reports"].select {
+                                    filter {
+                                        eq("visibility", "public")
+                                        exact("deleted_at", null)
+                                        if (!reportCursor.isNullOrBlank()) {
+                                            lt("created_at", reportCursor)
+                                        }
+                                    }
+                                    order("created_at", order = Order.DESCENDING)
+                                    limit(8)
+                                }.decodeList<RemoteDeepSearchReportDto>()
+                            }.getOrElse { emptyList() }
+                        }
+
                         // 2. Fetch articles page
                         val articlesDeferred = async {
                             db.rpc(
@@ -162,13 +180,46 @@ object FeedRepository {
                         }
 
                         val rpcReports = reportsDeferred.await()
+                        val deepReports = deepReportsDeferred.await()
                         val rpcArticles = articlesDeferred.await()
 
-                        val reportItems = rpcReports.map { it.toFeedItem() }
+                        val standardReportItems = rpcReports.map { it.toFeedItem() }
+                        val deepReportItems = deepReports.map { dto ->
+                            FeedItem.ReportItem(
+                                report = SupabaseReport(
+                                    id = dto.id,
+                                    userId = dto.userId,
+                                    originalQuery = dto.query,
+                                    processedQuery = dto.query,
+                                    verdict = "deepsearch",
+                                    confidenceScore = 1.0,
+                                    sources = dto.sources,
+                                    modelVersion = "deepsearch",
+                                    processingTimeMs = 0,
+                                    language = "bn",
+                                    status = "completed",
+                                    reportContent = dto.reportContent,
+                                    isPublic = true,
+                                    createdAt = dto.createdAt,
+                                    updatedAt = dto.updatedAt
+                                ),
+                                authorName = null,
+                                authorAvatarUrl = null,
+                                likeCount = 0,
+                                commentCount = 0,
+                                isLikedByMe = false
+                            )
+                        }
+
+                        // Combine standard reports and deep search reports deduplicating by ID
+                        val reportItems = (standardReportItems + deepReportItems)
+                            .distinctBy { it.report.id }
+                            .sortedByDescending { it.report.createdAt }
+
                         val articleItems = rpcArticles.map { it.toFeedItem() }
 
                         // Determine next cursors based on the last item's timestamp
-                        val nextReportCursor = rpcReports.lastOrNull()?.createdAt
+                        val nextReportCursor = reportItems.lastOrNull()?.report?.createdAt ?: rpcReports.lastOrNull()?.createdAt
                         val nextArticleCursor = rpcArticles.lastOrNull()?.publishedAt
 
                         // Interleave: insert 1 article every 4 report items

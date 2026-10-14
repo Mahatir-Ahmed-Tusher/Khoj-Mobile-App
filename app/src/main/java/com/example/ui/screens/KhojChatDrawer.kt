@@ -382,81 +382,13 @@ fun KhojChatView(
         }
     }
 
-    val pickImageLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            selectedImageUri = uri
-            extractedOcrText = ""
-            showImageClaimError = false
-            isExtractingImage = true
-            scope.launch {
-                try {
-                    val extractedClaim = ImageOcrHelper.extractTextFromUri(context, uri)
-                    if (extractedClaim.isNotBlank()) {
-                        extractedOcrText = extractedClaim
-                    } else {
-                        Toast.makeText(
-                            context,
-                            if (isBn) "ছবিতে কোনো পাঠযোগ্য লেখা পাওয়া যায়নি।" else "No readable text found in image.",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("KhojChatView", "OCR failed", e)
-                    Toast.makeText(
-                        context,
-                        if (isBn) "ছবি থেকে লেখা পড়া সম্ভব হয়নি।" else "Failed to extract text from image.",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                } finally {
-                    isExtractingImage = false
-                }
-            }
-        }
-    }
+    val registryOwner = androidx.activity.compose.LocalActivityResultRegistryOwner.current
 
-    val takeCameraPhotoLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicture()
-    ) { success: Boolean ->
-        val uri = cameraPhotoUri
-        if (success && uri != null) {
-            selectedImageUri = uri
-            extractedOcrText = ""
-            showImageClaimError = false
-            isExtractingImage = true
-            scope.launch {
-                try {
-                    val extractedClaim = ImageOcrHelper.extractTextFromUri(context, uri)
-                    if (extractedClaim.isNotBlank()) {
-                        extractedOcrText = extractedClaim
-                    } else {
-                        Toast.makeText(
-                            context,
-                            if (isBn) "ছবিতে কোনো পাঠযোগ্য লেখা পাওয়া যায়নি।" else "No readable text found in image.",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("KhojChatView", "Camera OCR failed", e)
-                    Toast.makeText(
-                        context,
-                        if (isBn) "ছবি থেকে লেখা পড়া সম্ভব হয়নি।" else "Failed to extract text from image.",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                } finally {
-                    isExtractingImage = false
-                }
-            }
-        }
-    }
-
-    val pickDocumentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            val mimeType = context.contentResolver.getType(uri) ?: ""
-            if (mimeType.startsWith("image/")) {
+    val pickImageLauncher = if (registryOwner != null) {
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.PickVisualMedia()
+        ) { uri: Uri? ->
+            if (uri != null) {
                 selectedImageUri = uri
                 extractedOcrText = ""
                 showImageClaimError = false
@@ -466,24 +398,109 @@ fun KhojChatView(
                         val extractedClaim = ImageOcrHelper.extractTextFromUri(context, uri)
                         if (extractedClaim.isNotBlank()) {
                             extractedOcrText = extractedClaim
+                        } else {
+                            Toast.makeText(
+                                context,
+                                if (isBn) "ছবিতে কোনো পাঠযোগ্য লেখা পাওয়া যায়নি।" else "No readable text found in image.",
+                                Toast.LENGTH_SHORT
+                            ).show()
                         }
                     } catch (e: Exception) {
-                        android.util.Log.e("KhojChatView", "Doc OCR failed", e)
+                        android.util.Log.e("KhojChatView", "OCR failed", e)
+                        Toast.makeText(
+                            context,
+                            if (isBn) "ছবি থেকে লেখা পড়া সম্ভব হয়নি।" else "Failed to extract text from image.",
+                            Toast.LENGTH_SHORT
+                        ).show()
                     } finally {
                         isExtractingImage = false
                     }
                 }
-            } else {
-                Toast.makeText(
-                    context,
-                    if (isBn) "ফাইল সংযুক্ত হয়েছে" else "File selected",
-                    Toast.LENGTH_SHORT
-                ).show()
             }
         }
-    }
+    } else null
+
+    val takeCameraPhotoLauncher = if (registryOwner != null) {
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.TakePicture()
+        ) { success: Boolean ->
+            val uri = cameraPhotoUri
+            if (success && uri != null) {
+                selectedImageUri = uri
+                extractedOcrText = ""
+                showImageClaimError = false
+                isExtractingImage = true
+                scope.launch {
+                    try {
+                        val extractedClaim = ImageOcrHelper.extractTextFromUri(context, uri)
+                        if (extractedClaim.isNotBlank()) {
+                            extractedOcrText = extractedClaim
+                        } else {
+                            Toast.makeText(
+                                context,
+                                if (isBn) "ছবিতে কোনো পাঠযোগ্য লেখা পাওয়া যায়নি।" else "No readable text found in image.",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("KhojChatView", "Camera OCR failed", e)
+                        Toast.makeText(
+                            context,
+                            if (isBn) "ছবি থেকে লেখা পড়া সম্ভব হয়নি।" else "Failed to extract text from image.",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    } finally {
+                        isExtractingImage = false
+                    }
+                }
+            }
+        }
+    } else null
+
+    val pickDocumentLauncher = if (registryOwner != null) {
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.GetContent()
+        ) { uri: Uri? ->
+            if (uri != null) {
+                val mimeType = context.contentResolver.getType(uri) ?: ""
+                if (mimeType.startsWith("image/")) {
+                    selectedImageUri = uri
+                    extractedOcrText = ""
+                    showImageClaimError = false
+                    isExtractingImage = true
+                    scope.launch {
+                        try {
+                            val extractedClaim = ImageOcrHelper.extractTextFromUri(context, uri)
+                            if (extractedClaim.isNotBlank()) {
+                                extractedOcrText = extractedClaim
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("KhojChatView", "Doc OCR failed", e)
+                        } finally {
+                            isExtractingImage = false
+                        }
+                    }
+                } else {
+                    Toast.makeText(
+                        context,
+                        if (isBn) "ফাইল সংযুক্ত হয়েছে" else "File selected",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+    } else null
 
     fun launchCameraCapture() {
+        val launcher = takeCameraPhotoLauncher
+        if (launcher == null) {
+            Toast.makeText(
+                context,
+                if (isBn) "ক্যামেরা ব্যবহার করতে মূল অ্যাপে প্রবেশ করুন" else "Please use the main app to capture photos",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
         try {
             val cacheDir = context.cacheDir
             val photoFile = java.io.File(cacheDir, "camera_${System.currentTimeMillis()}.jpg")
@@ -493,7 +510,7 @@ fun KhojChatView(
                 photoFile
             )
             cameraPhotoUri = photoUri
-            takeCameraPhotoLauncher.launch(photoUri)
+            launcher.launch(photoUri)
         } catch (e: Exception) {
             android.util.Log.e("KhojChatView", "Error launching camera", e)
             Toast.makeText(
@@ -926,12 +943,28 @@ fun KhojChatView(
                 onDismiss = { showActionsDrawer = false },
                 onTakePhoto = { launchCameraCapture() },
                 onPickGallery = {
-                    pickImageLauncher.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                    )
+                    if (pickImageLauncher != null) {
+                        pickImageLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    } else {
+                        Toast.makeText(
+                            context,
+                            if (isBn) "ছবি নির্বাচন করতে মূল অ্যাপে প্রবেশ করুন" else "Please use the main app to select images",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
                 },
                 onUploadFiles = {
-                    pickDocumentLauncher.launch("*/*")
+                    if (pickDocumentLauncher != null) {
+                        pickDocumentLauncher.launch("*/*")
+                    } else {
+                        Toast.makeText(
+                            context,
+                            if (isBn) "ফাইল নির্বাচন করতে মূল অ্যাপে প্রবেশ করুন" else "Please use the main app to upload files",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
                 },
                 isDeepSearchActive = isDeepSearchActive,
                 onToggleDeepSearch = {

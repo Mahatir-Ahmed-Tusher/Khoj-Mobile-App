@@ -69,7 +69,42 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
         loadAvatarState(user)
     }
 
+    private val profilePrefs = application.getSharedPreferences("profile_prefs", android.content.Context.MODE_PRIVATE)
+    private var activeUserId: String? = null
+
+    private fun getAnalyticsCacheKey(userId: String?): String {
+        return "cached_analytics_result_${userId ?: "default"}"
+    }
+
+    private fun loadCachedAnalytics(userId: String?) {
+        val key = getAnalyticsCacheKey(userId)
+        val cachedJson = profilePrefs.getString(key, null)
+        if (!cachedJson.isNullOrBlank()) {
+            try {
+                _analyticsResult.value = kotlinx.serialization.json.Json.decodeFromString<AnalyticsResult>(cachedJson)
+            } catch (e: Exception) {
+                _analyticsResult.value = null
+            }
+        } else {
+            _analyticsResult.value = null
+        }
+    }
+
+    private fun saveCachedAnalytics(userId: String?, result: AnalyticsResult?) {
+        val key = getAnalyticsCacheKey(userId)
+        if (result != null) {
+            try {
+                val encoded = kotlinx.serialization.json.Json.encodeToString(AnalyticsResult.serializer(), result)
+                profilePrefs.edit().putString(key, encoded).apply()
+            } catch (_: Exception) {}
+        } else {
+            profilePrefs.edit().remove(key).apply()
+        }
+    }
+
     fun loadProfileData(userId: String) {
+        activeUserId = userId
+        loadCachedAnalytics(userId)
         historyJob?.cancel()
         historyJob = viewModelScope.launch {
             _isLoadingHistory.value = true
@@ -108,11 +143,6 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
                     .sortedByDescending { getHistoryItemTimestamp(it) }
 
                 _searchHistory.value = mergedHistory
-
-                // Auto trigger analytics analysis if not empty and not already analyzed
-                if (mergedHistory.isNotEmpty() && _analyticsResult.value == null) {
-                    analyzeHabits(mergedHistory)
-                }
                 _isLoadingHistory.value = false
             }
         }
@@ -145,17 +175,27 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
         val itemQuery = item.query
         val itemReportId = item.reportId
         viewModelScope.launch {
+            // 1. Delete locally from Room SQLite and DataStore
+            if (!itemReportId.isNullOrBlank()) {
+                repo.deleteReport(itemReportId)
+                deepSearchRepo.deleteReport(itemReportId)
+            }
+            if (itemId != itemReportId) {
+                repo.deleteReport(itemId)
+                deepSearchRepo.deleteReport(itemId)
+            }
+
+            // 2. Delete remotely from Supabase
             val result = ProfileRepository.deleteHistoryItem(itemId, itemQuery, itemReportId)
             if (result.isSuccess) {
                 // Filter out the deleted item from the state list locally to give instant feedback
-                _searchHistory.value = _searchHistory.value.filter { it.id != itemId }
+                _searchHistory.value = _searchHistory.value.filter { it.id != itemId && (itemReportId == null || it.reportId != itemReportId) }
                 
-                // Clear analytics and re-analyze with remaining history
+                // If all history items are deleted, clear cached analytics
                 val remaining = _searchHistory.value
-                if (remaining.isNotEmpty()) {
-                    analyzeHabits(remaining)
-                } else {
+                if (remaining.isEmpty()) {
                     _analyticsResult.value = null
+                    saveCachedAnalytics(activeUserId, null)
                 }
             } else {
                 val error = result.exceptionOrNull()
@@ -183,9 +223,10 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun analyzeHabits(history: List<UserSearchHistory>) {
+    fun analyzeHabits(history: List<UserSearchHistory>, targetUserId: String? = activeUserId) {
         if (history.isEmpty()) {
             _analyticsResult.value = null
+            saveCachedAnalytics(targetUserId, null)
             return
         }
         viewModelScope.launch {
@@ -193,10 +234,12 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
             val queries = history.map { it.query }
             val result = AnalyticsEngine.analyzeSearchHabits(queries)
             if (result.isSuccess) {
-                _analyticsResult.value = result.getOrNull()
+                val newResult = result.getOrNull()
+                _analyticsResult.value = newResult
+                saveCachedAnalytics(targetUserId, newResult)
             } else {
-                // Keep previous analytics or clear depending on preference, we will keep it null
-                _analyticsResult.value = null
+                val error = result.exceptionOrNull()
+                _errorMessage.value = error?.localizedMessage ?: "Failed to analyze search habits"
             }
             _isAnalyzing.value = false
         }

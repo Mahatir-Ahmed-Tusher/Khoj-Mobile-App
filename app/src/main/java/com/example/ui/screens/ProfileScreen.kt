@@ -54,6 +54,10 @@ import com.example.ui.viewmodel.ProfileViewModel
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Locale
+import com.example.ui.components.MarkdownText
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 
 val activeBengaliFont = mutableStateOf<androidx.compose.ui.text.font.FontFamily>(AnekFont)
@@ -724,15 +728,20 @@ fun HistoryItemRow(
 
             var foundReport: FactCheckReport? = null
             if (!item.reportId.isNullOrBlank()) {
-                // 1. Check loaded reports in FactCheckViewModel
-                foundReport = factCheckViewModel.remoteHistoryReports.value.find { it.id == item.reportId }
-                if (foundReport == null) {
-                    // 2. Fetch from database using repo
-                    val dbRepo = com.example.data.repository.FactCheckRepository(context)
-                    foundReport = dbRepo.getReportById(item.reportId)
-                    if (foundReport == null) {
-                        // 3. Fallback to Supabase remote retrieval mapping
-                        foundReport = dbRepo.getRemoteHistoryReports(item.userId).find { it.id == item.reportId }
+                // 1. Prioritize local Room database which contains the full markdownReport
+                val dbRepo = com.example.data.repository.FactCheckRepository(context)
+                val localReport = dbRepo.getReportById(item.reportId)
+                if (localReport != null && !localReport.markdownReport.isNullOrBlank()) {
+                    foundReport = localReport
+                } else {
+                    // 2. Check loaded reports in FactCheckViewModel
+                    val vmReport = factCheckViewModel.remoteHistoryReports.value.find { it.id == item.reportId }
+                    if (vmReport != null && !vmReport.markdownReport.isNullOrBlank() &&
+                        (localReport == null || vmReport.markdownReport.length > (localReport.markdownReport?.length ?: 0))) {
+                        foundReport = vmReport
+                    } else {
+                        // 3. Fallback to Supabase remote retrieval mapping or local fallback
+                        foundReport = dbRepo.getRemoteHistoryReports(item.userId).find { it.id == item.reportId } ?: localReport
                     }
                 }
             }
@@ -1047,9 +1056,15 @@ fun AnalyticsTab(
                                 "medium" -> Color(0xFFF59E0B)
                                 else -> Color(0xFF10B981)
                             }
+                            val displayRisk = when (it.lowercase()) {
+                                "high" -> if (isBn) "**উচ্চ ঝুঁকি** (High)" else "**High Risk**"
+                                "medium" -> if (isBn) "**মাঝারি ঝুঁকি** (Medium)" else "**Medium Risk**"
+                                "low" -> if (isBn) "**কম ঝুঁকি** (Low)" else "**Low Risk**"
+                                else -> "**$it**"
+                            }
                             AnalyticsCard(
                                 title = if (isBn) "ঝুঁকির মাত্রা" else "Vulnerability Risk",
-                                content = it,
+                                content = displayRisk,
                                 icon = Icons.Default.Warning,
                                 color = color,
                                 isDark = isDark
@@ -1122,7 +1137,7 @@ fun AnalyticsCard(
         border = BorderStroke(1.dp, if (isDark) Color(0xFF334155) else Color(0xFFE2E8F0)),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
@@ -1138,16 +1153,24 @@ fun AnalyticsCard(
                     fontFamily = activeBengaliFont.value,
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp,
+                    lineHeight = 22.sp,
+                    style = TextStyle(
+                        platformStyle = @Suppress("DEPRECATION") PlatformTextStyle(includeFontPadding = true),
+                        lineHeightStyle = LineHeightStyle(
+                            alignment = LineHeightStyle.Alignment.Center,
+                            trim = LineHeightStyle.Trim.None
+                        )
+                    ),
                     color = MaterialTheme.colorScheme.onBackground
                 )
             }
             Spacer(Modifier.height(8.dp))
-            Text(
+            MarkdownText(
                 text = content,
-                fontFamily = activeBengaliFont.value,
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                lineHeight = 20.sp
+                fontToUse = activeBengaliFont.value,
+                fontSize = 14,
+                lineHeight = 22,
+                textColor = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

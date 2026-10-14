@@ -73,13 +73,7 @@ fun OverlayKhojChatDrawer(
                 fontToUse = fontToUse,
                 modifier = Modifier.fillMaxSize(),
                 showDragHandle = true,
-                headerIcon = {
-                    Image(
-                        painter = painterResource(id = R.drawable.khoj_chat_tooltip),
-                        contentDescription = null,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
+                headerIcon = null
             )
         }
     }

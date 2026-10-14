@@ -71,13 +71,34 @@ fun ReportScreen(
         FontFamily.Default
     }
 
+    var activeReport by remember(report.id) { mutableStateOf(report) }
+
+    LaunchedEffect(report.id) {
+        val dbRepo = com.example.data.repository.FactCheckRepository(context)
+        val localReport = dbRepo.getReportById(report.id)
+        if (localReport != null && !localReport.markdownReport.isNullOrBlank() &&
+            localReport.markdownReport.length > (activeReport.markdownReport?.length ?: 0)) {
+            activeReport = localReport
+        } else if (activeReport.markdownReport.isNullOrBlank() || (activeReport.markdownReport?.length ?: 0) <= 600) {
+            val userId = com.example.data.repository.AuthRepository.currentUserId
+            if (!userId.isNullOrBlank()) {
+                val remoteList = dbRepo.getRemoteHistoryReports(userId)
+                val fullRemote = remoteList.find { it.id == report.id }
+                if (fullRemote != null && !fullRemote.markdownReport.isNullOrBlank() &&
+                    fullRemote.markdownReport.length > (activeReport.markdownReport?.length ?: 0)) {
+                    activeReport = fullRemote
+                }
+            }
+        }
+    }
+
     val titleText = getString("report_title", isBn)
     val claimLabel = getString("claim_label", isBn)
     val confidenceLabel = getString("confidence_label", isBn)
     val sourcesLabel = getString("sources_label", isBn)
     val contradictingLabel = getString("contradicting_label", isBn)
 
-    val verdictText = when (report.verdict.lowercase()) {
+    val verdictText = when (activeReport.verdict.lowercase()) {
         "true" -> getString("true", isBn)
         "false" -> getString("false", isBn)
         else -> getString("misleading", isBn)
@@ -85,8 +106,8 @@ fun ReportScreen(
 
     // Extract sources
     val engine = remember { FactCheckEngine(context) }
-    val sources = remember(report) { engine.deserializeSources(report.sourcesJson) }
-    val contradictions = remember(report) { engine.deserializeContradictions(report.contradictingSourcesJson) }
+    val sources = remember(activeReport) { engine.deserializeSources(activeReport.sourcesJson) }
+    val contradictions = remember(activeReport) { engine.deserializeContradictions(activeReport.contradictingSourcesJson) }
 
     var showShareModal by remember { mutableStateOf(false) }
 
@@ -113,7 +134,7 @@ fun ReportScreen(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = report.claimText,
+                        text = activeReport.claimText,
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.Medium
                     )
@@ -121,13 +142,13 @@ fun ReportScreen(
             }
 
             // 3-way Verdict Badge Card
-            val verdictColor = when (report.verdict.lowercase()) {
+            val verdictColor = when (activeReport.verdict.lowercase()) {
                 "true" -> Color(0xFF16A34A)
                 "false" -> Color(0xFFDC2626)
                 else -> Color(0xFFD97706)
             }
 
-            val lottieRes = when (report.verdict.lowercase()) {
+            val lottieRes = when (activeReport.verdict.lowercase()) {
                 "true" -> R.raw.anim_true
                 "false" -> R.raw.anim_false
                 "misleading" -> R.raw.anim_misleading
@@ -198,14 +219,14 @@ fun ReportScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "${report.confidence}%",
+                            text = "${activeReport.confidence}%",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = verdictColor
                         )
                     }
                     LinearProgressIndicator(
-                        progress = report.confidence / 100f,
+                        progress = activeReport.confidence / 100f,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(8.dp)
@@ -218,10 +239,10 @@ fun ReportScreen(
 
             // Privacy Switch Card (only if the user is the owner of the report)
             val currentUserId = AuthRepository.currentUserId
-            val isOwner = !currentUserId.isNullOrEmpty() && report.userId == currentUserId
+            val isOwner = !currentUserId.isNullOrEmpty() && activeReport.userId == currentUserId
 
             if (isOwner) {
-                var isPublicStatus by remember(report.id) { mutableStateOf(report.isPublic) }
+                var isPublicStatus by remember(activeReport.id) { mutableStateOf(activeReport.isPublic) }
 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -293,7 +314,7 @@ fun ReportScreen(
                             checked = isPublicStatus,
                             onCheckedChange = { checked ->
                                 isPublicStatus = checked
-                                viewModel.updateReportPrivacy(report.id, checked) {
+                                viewModel.updateReportPrivacy(activeReport.id, checked) {
                                     onPrivacyChanged()
                                 }
                             },
@@ -313,7 +334,7 @@ fun ReportScreen(
             // new result, history, feed. Uses getEffectiveMarkdown() which handles both new
             // (markdownReport) and legacy (summaryBn + reasoningBn) reports gracefully.
             UnifiedFactCheckReportView(
-                report = report,
+                report = activeReport,
                 sources = sources,
                 fontToUse = fontToUse,
                 modifier = Modifier.fillMaxWidth()
@@ -471,11 +492,11 @@ fun ReportScreen(
 
         // Glassmorphic Share Modal Popup
         if (showShareModal) {
-            val reportUrl = "https://khoj-ai.bd/factcheck-detail?id=${report.id}"
+            val reportUrl = "https://khoj-ai.bd/factcheck-detail?id=${activeReport.id}"
             val shareText = if (isBn) {
-                "খোঁজ এআই দ্বারা যাচাইকৃত রিপোর্ট:\nদাবি: ${report.claimText}\nফলাফল: ${verdictText}\nবিস্তারিত দেখুন: $reportUrl"
+                "খোঁজ এআই দ্বারা যাচাইকৃত রিপোর্ট:\nদাবি: ${activeReport.claimText}\nফলাফল: ${verdictText}\nবিস্তারিত দেখুন: $reportUrl"
             } else {
-                "Factchecked Report by Khoj AI:\nClaim: ${report.claimText}\nVerdict: ${report.verdict}\nView details: $reportUrl"
+                "Factchecked Report by Khoj AI:\nClaim: ${activeReport.claimText}\nVerdict: ${activeReport.verdict}\nView details: $reportUrl"
             }
 
             Dialog(

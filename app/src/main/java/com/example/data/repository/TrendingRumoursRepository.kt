@@ -47,11 +47,19 @@ class TrendingRumoursRepository(private val prefs: SharedPreferences) {
         return emptyList()
     }
 
+    fun getLastSyncTime(region: TrendingRegion): Long {
+        return prefs.getLong("trending_rumours_last_sync_${region.name}", 0L)
+    }
+
     fun saveCachedRumours(region: TrendingRegion, rumours: List<TrendingRumourUi>) {
         val key = "trending_rumours_cache_${region.name}"
+        val timeKey = "trending_rumours_last_sync_${region.name}"
         try {
             val cacheStr = json.encodeToString(rumours)
-            prefs.edit().putString(key, cacheStr).apply()
+            prefs.edit()
+                .putString(key, cacheStr)
+                .putLong(timeKey, System.currentTimeMillis())
+                .apply()
         } catch (e: Exception) {
             Log.e("TrendingRumours", "Failed to encode cache", e)
         }
@@ -81,21 +89,28 @@ class TrendingRumoursRepository(private val prefs: SharedPreferences) {
             Log.w("TrendingRumours", "Cloud Run fetch failed, falling back to Supabase", e)
         }
 
-        // 2. Cloud Run failed or returned nothing — fall back to Supabase.
-        val supabaseResult = SupabaseClient.api.getTrendingRumours(apiKey = BuildConfig.SUPABASE_ANON_KEY)
-        val list = supabaseResult.map {
-            TrendingRumourUi(
-                source = it.source,
-                title = it.title,
-                url = it.url,
-                timestamp = it.publishedAt,
-                thumbnail = null
-            )
+        // 2. Cloud Run failed or returned nothing — fall back to Supabase safely.
+        try {
+            val supabaseResult = SupabaseClient.api.getTrendingRumours(apiKey = BuildConfig.SUPABASE_ANON_KEY)
+            val list = supabaseResult.map {
+                TrendingRumourUi(
+                    source = it.source,
+                    title = it.title,
+                    url = it.url,
+                    timestamp = it.publishedAt,
+                    thumbnail = null
+                )
+            }
+            val sorted = sortRumoursForRegion(region, list)
+            if (sorted.isNotEmpty()) {
+                saveCachedRumours(region, sorted)
+                return sorted
+            }
+        } catch (e: Exception) {
+            Log.w("TrendingRumours", "Supabase fetch failed", e)
         }
-        val sorted = sortRumoursForRegion(region, list)
-        if (sorted.isNotEmpty()) {
-            saveCachedRumours(region, sorted)
-        }
-        return sorted
+
+        // 3. Fall back to cached rumours (offline mode)
+        return getCachedRumours(region)
     }
 }

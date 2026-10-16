@@ -99,6 +99,8 @@ import com.example.ui.components.MarkdownText
 import com.example.ui.components.LiquidGlassBottomNav
 import com.example.ui.components.OfflineStateCard
 import com.example.ui.components.ThemeSwitcher
+import com.example.ui.components.DeleteConfirmationDialog
+import com.example.ui.components.RumorMeterSummaryCard
 import com.example.utils.NetworkErrorHelper
 import io.github.jan.supabase.auth.status.SessionStatus
 import androidx.compose.ui.platform.LocalConfiguration
@@ -140,7 +142,8 @@ enum class AppScreen {
     HELP_ARTICLE,
     UNIFIED_REPORT,
     BANGLA_AI_TEXT_DETECTOR,
-    KHOJ_CHAT
+    KHOJ_CHAT,
+    RUMOR_METER
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -523,7 +526,8 @@ fun MainAppContent(viewModel: FactCheckViewModel) {
             AppScreen.IMAGE_SEARCH,
             AppScreen.AI_IMAGE_DETECTOR,
             AppScreen.ALL_TRENDING_RUMOURS,
-            AppScreen.KHOJ_CHAT
+            AppScreen.KHOJ_CHAT,
+            AppScreen.RUMOR_METER
         )
         Box(modifier = Modifier.fillMaxSize()) {
             Box(
@@ -565,6 +569,7 @@ fun MainAppContent(viewModel: FactCheckViewModel) {
                         currentScreen = AppScreen.WEB_SEARCH
                     },
                     onNavigateToAllTrendingRumours = { currentScreen = AppScreen.ALL_TRENDING_RUMOURS },
+                    onNavigateToRumorMeter = { currentScreen = AppScreen.RUMOR_METER },
                     onNavigateToAiImageDetector = { currentScreen = AppScreen.AI_IMAGE_DETECTOR },
                     onNavigateToBanglaAiTextDetector = { textToAnalyze ->
                         if (!textToAnalyze.isNullOrBlank()) {
@@ -961,6 +966,10 @@ fun MainAppContent(viewModel: FactCheckViewModel) {
                     isBn = isBn,
                     onBack = { currentScreen = AppScreen.HOME }
                 )
+                AppScreen.RUMOR_METER -> RumorMeterScreen(
+                    isBn = isBn,
+                    onBack = { currentScreen = AppScreen.HOME }
+                )
                 AppScreen.IMAGE_SEARCH -> {
                     if (!isOnline) {
                         NoInternetScreen(
@@ -1278,6 +1287,7 @@ fun HomeScreen(
     onNavigateToDeepSearch: (String) -> Unit = {},
     onNavigateToWebSearch: (String) -> Unit = {},
     onNavigateToAllTrendingRumours: () -> Unit = {},
+    onNavigateToRumorMeter: () -> Unit = {},
     onNavigateToAiImageDetector: () -> Unit,
     onNavigateToBanglaAiTextDetector: (String?) -> Unit = {},
     onNavigateToImageSearch: () -> Unit = {},
@@ -2026,6 +2036,13 @@ fun HomeScreen(
                 onNavigateToSeeAll = onNavigateToAllTrendingRumours
             )
 
+            // Khoj Rumor Meter Summary Card (Horizontally stretched)
+            RumorMeterSummaryCard(
+                isBn = isBn,
+                onClick = onNavigateToRumorMeter,
+                onSeeMoreClick = onNavigateToRumorMeter
+            )
+
             // Manual CMS Fact Checks Block
             ManualFactChecksSection(
                 viewModel = viewModel,
@@ -2610,6 +2627,67 @@ fun HistoryScreen(
         HistoryCategory.DEEP_SEARCH -> filteredDeepSearchHistory.isNotEmpty()
     }
 
+    val bengaliFontPreference by viewModel.bengaliFontPreference.collectAsStateWithLifecycle()
+    val fontToUse = if (isBn) {
+        if (bengaliFontPreference == "anek") AnekBanglaFamily else TiroBanglaFamily
+    } else {
+        FontFamily.Default
+    }
+
+    var itemToDeleteId by remember { mutableStateOf<String?>(null) }
+    var itemToDeleteType by remember { mutableStateOf<HistoryCategory?>(null) }
+    var showClearAllDialog by remember { mutableStateOf(false) }
+
+    DeleteConfirmationDialog(
+        isOpen = itemToDeleteId != null,
+        isBn = isBn,
+        fontFamily = fontToUse,
+        onConfirm = {
+            val id = itemToDeleteId
+            val type = itemToDeleteType
+            if (id != null) {
+                if (type == HistoryCategory.FACT_CHECK) {
+                    viewModel.deleteReport(id)
+                } else if (type == HistoryCategory.DEEP_SEARCH) {
+                    coroutineScope.launch {
+                        deepSearchRepo.deleteReport(id)
+                    }
+                }
+            }
+            itemToDeleteId = null
+            itemToDeleteType = null
+        },
+        onDismiss = {
+            itemToDeleteId = null
+            itemToDeleteType = null
+        }
+    )
+
+    DeleteConfirmationDialog(
+        isOpen = showClearAllDialog,
+        isBn = isBn,
+        fontFamily = fontToUse,
+        title = if (isBn) "সব ইতিহাস মুছে ফেলবেন?" else "Clear All History?",
+        message = if (isBn) {
+            "আপনার সমস্ত সংরক্ষিত হিস্ট্রি স্থায়ীভাবে মুছে যাবে। আপনি কি নিশ্চিত?"
+        } else {
+            "All your saved history will be permanently deleted. Are you sure you want to proceed?"
+        },
+        onConfirm = {
+            if (selectedTab == HistoryCategory.FACT_CHECK) {
+                viewModel.clearHistory()
+            } else {
+                coroutineScope.launch {
+                    deepSearchRepo.clearAll()
+                }
+            }
+            showClearAllDialog = false
+        },
+        onDismiss = {
+            showClearAllDialog = false
+        }
+    )
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -2648,15 +2726,7 @@ fun HistoryScreen(
 
             if (hasItems) {
                 TextButton(
-                    onClick = {
-                        if (selectedTab == HistoryCategory.FACT_CHECK) {
-                            viewModel.clearHistory()
-                        } else {
-                            coroutineScope.launch {
-                                deepSearchRepo.clearAll()
-                            }
-                        }
-                    },
+                    onClick = { showClearAllDialog = true },
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                     colors = ButtonDefaults.textButtonColors(contentColor = ColorFalse)
                 ) {
@@ -2851,7 +2921,10 @@ fun HistoryScreen(
                                     report = report,
                                     isBn = isBn,
                                     onSelect = { onSelectReport(report) },
-                                    onDelete = { viewModel.deleteReport(report.id) }
+                                    onDelete = {
+                                        itemToDeleteId = report.id
+                                        itemToDeleteType = HistoryCategory.FACT_CHECK
+                                    }
                                 )
                             }
                         }
@@ -2900,9 +2973,8 @@ fun HistoryScreen(
                                     isBn = isBn,
                                     onSelect = { onSelectDeepSearchReport(deepReport) },
                                     onDelete = {
-                                        coroutineScope.launch {
-                                            deepSearchRepo.deleteReport(deepReport.id)
-                                        }
+                                        itemToDeleteId = deepReport.id
+                                        itemToDeleteType = HistoryCategory.DEEP_SEARCH
                                     }
                                 )
                             }

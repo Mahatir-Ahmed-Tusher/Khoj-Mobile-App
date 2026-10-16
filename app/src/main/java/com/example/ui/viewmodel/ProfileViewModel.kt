@@ -32,6 +32,9 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
     private val _isAnalyzing = MutableStateFlow(false)
     val isAnalyzing: StateFlow<Boolean> = _isAnalyzing.asStateFlow()
 
+    private val _analysisError = MutableStateFlow<String?>(null)
+    val analysisError: StateFlow<String?> = _analysisError.asStateFlow()
+
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
@@ -40,6 +43,9 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
 
     private val _updateNameError = MutableStateFlow<String?>(null)
     val updateNameError: StateFlow<String?> = _updateNameError.asStateFlow()
+
+    private val _remoteHistory = MutableStateFlow<List<UserSearchHistory>>(emptyList())
+    private val _locallyDeletedItemIds = MutableStateFlow<Set<String>>(emptySet())
 
     private val _customAvatarUrl = MutableStateFlow<String?>(null)
     val customAvatarUrl: StateFlow<String?> = _customAvatarUrl.asStateFlow()
@@ -109,39 +115,60 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
         historyJob = viewModelScope.launch {
             _isLoadingHistory.value = true
             _errorMessage.value = null
-            val remoteResult = ProfileRepository.fetchSearchHistory(userId)
-            val remoteHistory = remoteResult.getOrNull() ?: emptyList()
 
             // Trigger deep search sync
             deepSearchRepo.syncWithRemote()
 
-            kotlinx.coroutines.flow.combine(repo.allReports, deepSearchRepo.historyFlow) { factReports, deepReports ->
-                val factHistory = factReports.map { report ->
-                    UserSearchHistory(
-                        id = report.id,
-                        userId = report.userId ?: userId,
-                        query = report.claimText,
-                        searchType = "factcheck",
-                        reportId = report.id,
-                        createdAt = formatTimestampToIso(report.timestamp)
-                    )
+            val remoteResult = ProfileRepository.fetchSearchHistory(userId)
+            val fetchedRemote = remoteResult.getOrNull() ?: emptyList()
+            
+            // Filter out any locally deleted item IDs so they don't resurrect from cloud
+            val deletedIds = _locallyDeletedItemIds.value
+            _remoteHistory.value = fetchedRemote.filter { item ->
+                val idMatch = item.id != null && deletedIds.contains(item.id)
+                val reportMatch = item.reportId != null && deletedIds.contains(item.reportId)
+                !idMatch && !reportMatch
+            }
+
+            kotlinx.coroutines.flow.combine(
+                repo.allReports,
+                deepSearchRepo.historyFlow,
+                _remoteHistory
+            ) { factReports, deepReports, remoteList ->
+                val currentDeleted = _locallyDeletedItemIds.value
+                val factHistory = factReports
+                    .filter { !currentDeleted.contains(it.id) }
+                    .map { report ->
+                        UserSearchHistory(
+                            id = report.id,
+                            userId = report.userId ?: userId,
+                            query = report.claimText,
+                            searchType = "factcheck",
+                            reportId = report.id,
+                            createdAt = formatTimestampToIso(report.timestamp)
+                        )
+                    }
+                val deepHistory = deepReports
+                    .filter { !currentDeleted.contains(it.id) }
+                    .map { deep ->
+                        UserSearchHistory(
+                            id = deep.id,
+                            userId = deep.userId ?: userId,
+                            query = deep.query,
+                            searchType = "deepsearch",
+                            reportId = deep.id,
+                            createdAt = formatTimestampToIso(deep.timestamp)
+                        )
+                    }
+                val filteredRemote = remoteList.filter { item ->
+                    val idMatch = item.id != null && currentDeleted.contains(item.id)
+                    val reportMatch = item.reportId != null && currentDeleted.contains(item.reportId)
+                    !idMatch && !reportMatch
                 }
-                val deepHistory = deepReports.map { deep ->
-                    UserSearchHistory(
-                        id = deep.id,
-                        userId = deep.userId ?: userId,
-                        query = deep.query,
-                        searchType = "deepsearch",
-                        reportId = deep.id,
-                        createdAt = formatTimestampToIso(deep.timestamp)
-                    )
-                }
-                (factHistory + deepHistory)
-            }.collect { localHistoryList ->
-                val mergedHistory = (localHistoryList + remoteHistory)
+                (factHistory + deepHistory + filteredRemote)
                     .distinctBy { it.reportId ?: it.query }
                     .sortedByDescending { getHistoryItemTimestamp(it) }
-
+            }.collect { mergedHistory ->
                 _searchHistory.value = mergedHistory
                 _isLoadingHistory.value = false
             }
@@ -170,12 +197,37 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun deleteHistoryItem(item: UserSearchHistory) {
+    fun deleteHistoryItem(item: UserSearchHistory, onCompleted: (() -> Unit)? = null) {
         val itemId = item.id ?: return
         val itemQuery = item.query
         val itemReportId = item.reportId
+
+        // Blacklist IDs to prevent any resurrection
+        val targetIds = listOfNotNull(itemId, itemReportId).distinct()
+        _locallyDeletedItemIds.value = _locallyDeletedItemIds.value + targetIds
+
+        // 1. OPTIMISTIC INSTANT UPDATE (0ms delay)
+        _remoteHistory.value = _remoteHistory.value.filter { remoteItem ->
+            val matchId = remoteItem.id != null && targetIds.contains(remoteItem.id)
+            val matchReport = remoteItem.reportId != null && targetIds.contains(remoteItem.reportId)
+            !matchId && !matchReport
+        }
+        _searchHistory.value = _searchHistory.value.filter { currentItem ->
+            val matchId = currentItem.id != null && targetIds.contains(currentItem.id)
+            val matchReport = currentItem.reportId != null && targetIds.contains(currentItem.reportId)
+            !matchId && !matchReport
+        }
+
+        // If all history items are deleted, clear cached analytics
+        if (_searchHistory.value.isEmpty()) {
+            _analyticsResult.value = null
+            saveCachedAnalytics(activeUserId, null)
+        }
+
+        onCompleted?.invoke()
+
         viewModelScope.launch {
-            // 1. Delete locally from Room SQLite and DataStore
+            // 2. Local persistence deletions (Room SQLite & DataStore)
             if (!itemReportId.isNullOrBlank()) {
                 repo.deleteReport(itemReportId)
                 deepSearchRepo.deleteReport(itemReportId)
@@ -185,21 +237,11 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
                 deepSearchRepo.deleteReport(itemId)
             }
 
-            // 2. Delete remotely from Supabase
+            // 3. Remote Supabase deletion (concurrent)
             val result = ProfileRepository.deleteHistoryItem(itemId, itemQuery, itemReportId)
-            if (result.isSuccess) {
-                // Filter out the deleted item from the state list locally to give instant feedback
-                _searchHistory.value = _searchHistory.value.filter { it.id != itemId && (itemReportId == null || it.reportId != itemReportId) }
-                
-                // If all history items are deleted, clear cached analytics
-                val remaining = _searchHistory.value
-                if (remaining.isEmpty()) {
-                    _analyticsResult.value = null
-                    saveCachedAnalytics(activeUserId, null)
-                }
-            } else {
+            if (result.isFailure) {
                 val error = result.exceptionOrNull()
-                _errorMessage.value = error?.localizedMessage ?: "Failed to delete history item"
+                android.util.Log.e("ProfileViewModel", "Remote deletion notice: ${error?.message}")
             }
         }
     }
@@ -226,20 +268,23 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
     fun analyzeHabits(history: List<UserSearchHistory>, targetUserId: String? = activeUserId) {
         if (history.isEmpty()) {
             _analyticsResult.value = null
+            _analysisError.value = null
             saveCachedAnalytics(targetUserId, null)
             return
         }
         viewModelScope.launch {
             _isAnalyzing.value = true
+            _analysisError.value = null
             val queries = history.map { it.query }
             val result = AnalyticsEngine.analyzeSearchHabits(queries)
             if (result.isSuccess) {
                 val newResult = result.getOrNull()
                 _analyticsResult.value = newResult
+                _analysisError.value = null
                 saveCachedAnalytics(targetUserId, newResult)
             } else {
                 val error = result.exceptionOrNull()
-                _errorMessage.value = error?.localizedMessage ?: "Failed to analyze search habits"
+                _analysisError.value = error?.localizedMessage ?: "Failed to analyze search habits"
             }
             _isAnalyzing.value = false
         }

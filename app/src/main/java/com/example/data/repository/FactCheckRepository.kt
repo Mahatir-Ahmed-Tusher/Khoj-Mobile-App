@@ -15,6 +15,7 @@ import io.github.jan.supabase.postgrest.query.Columns
 import com.example.data.local.CachePolicy
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
@@ -137,61 +138,76 @@ class FactCheckRepository(private val context: Context) {
 
     // Delete a report permanently across all local and remote layers
     suspend fun deleteReport(id: String) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-        // 1. Delete from local Room database
+        // 1. Delete from local Room database immediately
         dao.deleteReportById(id)
         
-        // 2. Delete from Supabase remote database with foreign key safety
+        // 2. Delete from Supabase remote database concurrently with foreign key safety
         val userId = AuthRepository.currentUserId
         if (userId != null) {
             runCatching {
-                // Delete child relations first (likes, comments, search history) to satisfy FK constraints
-                runCatching {
-                    com.example.data.api.KhojSupabaseClient.client.postgrest["post_likes"]
-                        .delete { filter { eq("post_id", id) } }
-                }
-                runCatching {
-                    com.example.data.api.KhojSupabaseClient.client.postgrest["post_comments"]
-                        .delete { filter { eq("post_id", id) } }
-                }
-                runCatching {
-                    com.example.data.api.KhojSupabaseClient.client.postgrest["user_search_history"]
-                        .delete {
-                            filter {
-                                eq("report_id", id)
-                                eq("user_id", userId)
+                kotlinx.coroutines.coroutineScope {
+                    val tasks = listOf(
+                        async {
+                            runCatching {
+                                com.example.data.api.KhojSupabaseClient.client.postgrest["post_likes"]
+                                    .delete { filter { eq("post_id", id) } }
+                            }
+                        },
+                        async {
+                            runCatching {
+                                com.example.data.api.KhojSupabaseClient.client.postgrest["post_comments"]
+                                    .delete { filter { eq("post_id", id) } }
+                            }
+                        },
+                        async {
+                            runCatching {
+                                com.example.data.api.KhojSupabaseClient.client.postgrest["user_search_history"]
+                                    .delete {
+                                        filter {
+                                            eq("report_id", id)
+                                            eq("user_id", userId)
+                                        }
+                                    }
+                            }
+                        },
+                        async {
+                            runCatching {
+                                com.example.data.api.KhojSupabaseClient.client.postgrest["user_search_history"]
+                                    .delete {
+                                        filter {
+                                            eq("id", id)
+                                            eq("user_id", userId)
+                                        }
+                                    }
+                            }
+                        },
+                        async {
+                            runCatching {
+                                com.example.data.api.KhojSupabaseClient.client.postgrest["factcheck_reports"]
+                                    .delete {
+                                        filter {
+                                            eq("id", id)
+                                            eq("user_id", userId)
+                                        }
+                                    }
+                            }
+                        },
+                        async {
+                            runCatching {
+                                com.example.data.api.KhojSupabaseClient.client.postgrest["deep_search_reports"]
+                                    .delete {
+                                        filter {
+                                            eq("id", id)
+                                            eq("user_id", userId)
+                                        }
+                                    }
                             }
                         }
-                }
-                runCatching {
-                    com.example.data.api.KhojSupabaseClient.client.postgrest["user_search_history"]
-                        .delete {
-                            filter {
-                                eq("id", id)
-                                eq("user_id", userId)
-                            }
-                        }
-                }
-                // Delete parent reports
-                runCatching {
-                    com.example.data.api.KhojSupabaseClient.client.postgrest["factcheck_reports"]
-                        .delete {
-                            filter {
-                                eq("id", id)
-                                eq("user_id", userId)
-                            }
-                        }
-                }
-                runCatching {
-                    com.example.data.api.KhojSupabaseClient.client.postgrest["deep_search_reports"]
-                        .delete {
-                            filter {
-                                eq("id", id)
-                                eq("user_id", userId)
-                            }
-                        }
+                    )
+                    tasks.awaitAll()
                 }
             }.onFailure { e ->
-                android.util.Log.e("FactCheckRepository", "Error during remote report deletion: ${e.message}")
+                android.util.Log.e("FactCheckRepository", "Error during concurrent remote report deletion: ${e.message}")
             }
         }
     }

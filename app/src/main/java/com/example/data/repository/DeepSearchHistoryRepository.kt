@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -455,50 +457,66 @@ class DeepSearchHistoryRepository(private val context: Context) {
         val userId = AuthRepository.currentUserId
         if (userId != null) {
             runCatching {
-                // Delete child relations first to satisfy FK constraints
-                runCatching {
-                    KhojSupabaseClient.client.postgrest["post_likes"]
-                        .delete { filter { eq("post_id", id) } }
-                }
-                runCatching {
-                    KhojSupabaseClient.client.postgrest["post_comments"]
-                        .delete { filter { eq("post_id", id) } }
-                }
-                runCatching {
-                    KhojSupabaseClient.client.postgrest["user_search_history"]
-                        .delete {
-                            filter {
-                                eq("report_id", id)
-                                eq("user_id", userId)
+                kotlinx.coroutines.coroutineScope {
+                    val tasks = listOf(
+                        async {
+                            runCatching {
+                                KhojSupabaseClient.client.postgrest["post_likes"]
+                                    .delete { filter { eq("post_id", id) } }
+                            }
+                        },
+                        async {
+                            runCatching {
+                                KhojSupabaseClient.client.postgrest["post_comments"]
+                                    .delete { filter { eq("post_id", id) } }
+                            }
+                        },
+                        async {
+                            runCatching {
+                                KhojSupabaseClient.client.postgrest["user_search_history"]
+                                    .delete {
+                                        filter {
+                                            eq("report_id", id)
+                                            eq("user_id", userId)
+                                        }
+                                    }
+                            }
+                        },
+                        async {
+                            runCatching {
+                                KhojSupabaseClient.client.postgrest["user_search_history"]
+                                    .delete {
+                                        filter {
+                                            eq("id", id)
+                                            eq("user_id", userId)
+                                        }
+                                    }
+                            }
+                        },
+                        async {
+                            runCatching {
+                                KhojSupabaseClient.client.postgrest["deep_search_reports"]
+                                    .delete {
+                                        filter {
+                                            eq("id", id)
+                                            eq("user_id", userId)
+                                        }
+                                    }
+                            }
+                        },
+                        async {
+                            runCatching {
+                                KhojSupabaseClient.client.postgrest["factcheck_reports"]
+                                    .delete {
+                                        filter {
+                                            eq("id", id)
+                                            eq("user_id", userId)
+                                        }
+                                    }
                             }
                         }
-                }
-                runCatching {
-                    KhojSupabaseClient.client.postgrest["user_search_history"]
-                        .delete {
-                            filter {
-                                eq("id", id)
-                                eq("user_id", userId)
-                            }
-                        }
-                }
-                runCatching {
-                    KhojSupabaseClient.client.postgrest["deep_search_reports"]
-                        .delete {
-                            filter {
-                                eq("id", id)
-                                eq("user_id", userId)
-                            }
-                        }
-                }
-                runCatching {
-                    KhojSupabaseClient.client.postgrest["factcheck_reports"]
-                        .delete {
-                            filter {
-                                eq("id", id)
-                                eq("user_id", userId)
-                            }
-                        }
+                    )
+                    tasks.awaitAll()
                 }
             }.onFailure { e ->
                 android.util.Log.e(TAG, "[DeepSearch:Delete] Failed to erase remote report: ${e.message}")

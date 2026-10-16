@@ -104,6 +104,27 @@ fun getString(key: String, isBn: Boolean): String {
         "discard" -> if (isBn) "Discard" else "Discard"
         "send" -> if (isBn) "SEND" else "SEND"
         
+        // Rumor Meter Observational Strings
+        "rumor_meter_title" -> if (isBn) "খোঁজ গুজব মিটার" else "Khoj Rumour Meter"
+        "rumor_meter_live" -> if (isBn) "লাইভ" else "LIVE"
+        "rumor_meter_normal" -> if (isBn) "স্বাভাবিক (Normal)" else "Normal"
+        "rumor_meter_moderate" -> if (isBn) "মাঝারি (Moderate)" else "Moderate"
+        "rumor_meter_high" -> if (isBn) "উচ্চ ঝুঁকি (High Risk)" else "High Risk"
+        "rumor_meter_velocity_label" -> if (isBn) "দৈনিক গতিবেগ:" else "Daily Velocity:"
+        "rumor_meter_per_day" -> if (isBn) "টি/দিন" else "/ day"
+        "rumor_meter_status_low" -> if (isBn) "গুজব প্রবাহ বর্তমানে কম" else "Rumour intensity currently low"
+        "rumor_meter_status_moderate" -> if (isBn) "মাঝারি মাত্রার গুজব সক্রিয়" else "Moderate rumour surge active"
+        "rumor_meter_status_high" -> if (isBn) "তীব্র গুজব ছড়িয়ে পড়ার ঝুঁকি" else "High risk of rumour outbreak"
+        "rumor_meter_overview" -> if (isBn) "ওভারভিউ" else "Overview"
+        "rumor_meter_taxonomy" -> if (isBn) "শ্রেণিবিভাগ" else "Taxonomy & Formats"
+        "rumor_meter_hotspots" -> if (isBn) "জেলা হটস্পট" else "District Hotspots"
+        "rumor_meter_claims" -> if (isBn) "দাবিসমূহ" else "Canonical Claims"
+        "rumor_meter_last_updated" -> if (isBn) "সর্বশেষ আপডেট" else "Last updated"
+        "rumor_meter_search_hint" -> if (isBn) "কোনো দাবি বা রিউমার অনুসন্ধান করুন..." else "Search canonical claim or rumour..."
+        "rumor_meter_zombie_chip" -> if (isBn) "জম্বি গুজব" else "Zombie Claims"
+        "rumor_meter_cross_border_chip" -> if (isBn) "সীমান্তপার" else "Cross-Border"
+        "rumor_meter_gender_chip" -> if (isBn) "নারী/জেন্ডার টার্গেটেড" else "Gender-Targeted"
+        
         else -> key
     }
 }

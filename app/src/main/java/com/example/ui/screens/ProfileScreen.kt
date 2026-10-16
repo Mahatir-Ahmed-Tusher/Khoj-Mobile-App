@@ -45,6 +45,7 @@ import com.example.data.model.FactCheckReport
 import com.example.data.model.SupabaseUser
 import com.example.data.model.UserSearchHistory
 import com.example.ui.components.AvatarCustomizerDialog
+import com.example.ui.components.DeleteConfirmationDialog
 import com.example.ui.theme.AnekBanglaFamily as AnekFont
 import com.example.ui.theme.TiroBanglaFamily
 import com.example.ui.theme.SlatePrimary
@@ -609,6 +610,23 @@ fun HistoryTab(
     val isLoading by viewModel.isLoadingHistory.collectAsStateWithLifecycle()
     val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
 
+    var itemPendingDelete by remember { mutableStateOf<UserSearchHistory?>(null) }
+
+    DeleteConfirmationDialog(
+        isOpen = itemPendingDelete != null,
+        isBn = isBn,
+        fontFamily = activeBengaliFont.value,
+        onConfirm = {
+            itemPendingDelete?.let { item ->
+                viewModel.deleteHistoryItem(item)
+            }
+            itemPendingDelete = null
+        },
+        onDismiss = {
+            itemPendingDelete = null
+        }
+    )
+
     if (isLoading) {
         val isDarkTheme = isDark || MaterialTheme.colorScheme.background.luminance() < 0.5f
         Column(
@@ -648,7 +666,7 @@ fun HistoryTab(
                     isDark = isDark,
                     onSelectReport = onSelectReport,
                     onSelectDeepSearchReport = onSelectDeepSearchReport,
-                    onDelete = { viewModel.deleteHistoryItem(item) }
+                    onDelete = { itemPendingDelete = item }
                 )
                 Spacer(Modifier.height(8.dp))
             }
@@ -880,6 +898,7 @@ fun AnalyticsTab(
 ) {
     val analytics by viewModel.analyticsResult.collectAsStateWithLifecycle()
     val isAnalyzing by viewModel.isAnalyzing.collectAsStateWithLifecycle()
+    val analysisError by viewModel.analysisError.collectAsStateWithLifecycle()
     val history by viewModel.searchHistory.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoadingHistory.collectAsStateWithLifecycle()
 
@@ -1102,6 +1121,15 @@ fun AnalyticsTab(
                         }
                     }
                 } else {
+                    if (analysisError != null) {
+                        Text(
+                            text = analysisError!!,
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 12.sp,
+                            fontFamily = activeBengaliFont.value,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                    }
                     Button(
                         onClick = { viewModel.analyzeHabits(history) },
                         colors = ButtonDefaults.buttonColors(containerColor = SlatePrimary),

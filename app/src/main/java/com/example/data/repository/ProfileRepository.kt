@@ -5,6 +5,8 @@ import com.example.data.model.UserSearchHistory
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Order
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.serialization.json.put
 
 object ProfileRepository {
@@ -27,75 +29,93 @@ object ProfileRepository {
     suspend fun deleteHistoryItem(id: String, query: String, reportId: String?): Result<Unit> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         runCatching {
             val userId = AuthRepository.currentUserId ?: throw Exception("User not authenticated")
-            
-            // Delete post interactions first to satisfy FK constraints
-            if (!reportId.isNullOrBlank()) {
-                runCatching {
-                    client.postgrest["post_likes"].delete { filter { eq("post_id", reportId) } }
-                }
-                runCatching {
-                    client.postgrest["post_comments"].delete { filter { eq("post_id", reportId) } }
-                }
-            }
-            runCatching {
-                client.postgrest["post_likes"].delete { filter { eq("post_id", id) } }
-            }
-            runCatching {
-                client.postgrest["post_comments"].delete { filter { eq("post_id", id) } }
-            }
-
-            // 1. Delete search history entry (match by id, report_id, or query)
-            runCatching {
-                client.postgrest["user_search_history"]
-                    .delete {
-                        filter {
-                            eq("id", id)
-                            eq("user_id", userId)
-                        }
-                    }
-            }
-            if (!reportId.isNullOrBlank()) {
-                runCatching {
-                    client.postgrest["user_search_history"]
-                        .delete {
-                            filter {
-                                eq("report_id", reportId)
-                                eq("user_id", userId)
-                            }
-                        }
-                }
-            }
-            if (query.isNotBlank()) {
-                runCatching {
-                    client.postgrest["user_search_history"]
-                        .delete {
-                            filter {
-                                eq("query", query)
-                                eq("user_id", userId)
-                            }
-                        }
-                }
-            }
-
-            // 2. Erase from factcheck_reports and deep_search_reports
             val targetIds = listOfNotNull(reportId, id).distinct()
-            targetIds.forEach { tid ->
-                runCatching {
-                    client.postgrest["factcheck_reports"].delete {
-                        filter {
-                            eq("id", tid)
-                            eq("user_id", userId)
+
+            kotlinx.coroutines.coroutineScope {
+                val tasks = mutableListOf<kotlinx.coroutines.Deferred<Unit>>()
+
+                // 1. Delete associated likes and comments concurrently
+                targetIds.forEach { tid ->
+                    tasks += async {
+                        runCatching {
+                            client.postgrest["post_likes"].delete { filter { eq("post_id", tid) } }
                         }
+                        Unit
+                    }
+                    tasks += async {
+                        runCatching {
+                            client.postgrest["post_comments"].delete { filter { eq("post_id", tid) } }
+                        }
+                        Unit
                     }
                 }
-                runCatching {
-                    client.postgrest["deep_search_reports"].delete {
-                        filter {
-                            eq("id", tid)
-                            eq("user_id", userId)
+
+                // 2. Delete user search history entries concurrently
+                tasks += async {
+                    runCatching {
+                        client.postgrest["user_search_history"].delete {
+                            filter {
+                                eq("id", id)
+                                eq("user_id", userId)
+                            }
                         }
                     }
+                    Unit
                 }
+                if (!reportId.isNullOrBlank()) {
+                    tasks += async {
+                        runCatching {
+                            client.postgrest["user_search_history"].delete {
+                                filter {
+                                    eq("report_id", reportId)
+                                    eq("user_id", userId)
+                                }
+                            }
+                        }
+                        Unit
+                    }
+                }
+                if (query.isNotBlank()) {
+                    tasks += async {
+                        runCatching {
+                            client.postgrest["user_search_history"].delete {
+                                filter {
+                                    eq("query", query)
+                                    eq("user_id", userId)
+                                }
+                            }
+                        }
+                        Unit
+                    }
+                }
+
+                // 3. Delete from factcheck_reports and deep_search_reports concurrently
+                targetIds.forEach { tid ->
+                    tasks += async {
+                        runCatching {
+                            client.postgrest["factcheck_reports"].delete {
+                                filter {
+                                    eq("id", tid)
+                                    eq("user_id", userId)
+                                }
+                            }
+                        }
+                        Unit
+                    }
+                    tasks += async {
+                        runCatching {
+                            client.postgrest["deep_search_reports"].delete {
+                                filter {
+                                    eq("id", tid)
+                                    eq("user_id", userId)
+                                }
+                            }
+                        }
+                        Unit
+                    }
+                }
+
+                tasks.awaitAll()
             }
             Unit
         }

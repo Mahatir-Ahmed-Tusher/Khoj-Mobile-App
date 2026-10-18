@@ -88,11 +88,10 @@ class FactCheckEngine(private val context: Context) {
             }
         } else {
             val sentences = cleanRaw.split(Regex("[।\n!?]")).map { it.trim() }.filter { it.isNotBlank() }
-            val hasQuestions = cleanRaw.contains("?") || cleanRaw.contains("কী") || cleanRaw.contains("কি ") || cleanRaw.contains("নাকি")
-            val needsNormalization = cleanRaw.length > 120 || sentences.size > 2 || cleanRaw.contains("\n") || hasQuestions
+            val isLargeInput = cleanRaw.length > 250 || sentences.size >= 3 || cleanRaw.contains("\n\n")
 
-            if (needsNormalization) {
-                PipelineTelemetry.log(pipelineType, PipelineStage.PLANNER, "Normalizing claim (${cleanRaw.length} chars, ${sentences.size} sentences)...")
+            if (isLargeInput) {
+                PipelineTelemetry.log(pipelineType, PipelineStage.PLANNER, "Normalizing large claim (${cleanRaw.length} chars, ${sentences.size} sentences)...")
                 try {
                     val distilled = ClaimExtractor.extractClaim(cleanRaw)
                     if (distilled.isNotBlank()) distilled else cleanRaw
@@ -101,7 +100,7 @@ class FactCheckEngine(private val context: Context) {
                     cleanRaw
                 }
             } else {
-                cleanRaw
+                sanitizeConciseClaim(cleanRaw)
             }
         }
 
@@ -177,7 +176,7 @@ class FactCheckEngine(private val context: Context) {
                 append("UNVERIFIED USER SUBMISSION (FOR CONTEXT ONLY, DO NOT ASSUME FACTUALITY):\n\"$cleanRaw\"\n\n")
             }
             append("EVIDENCE FOUND:\n$evidencePrompt\n\n")
-            append("Analyze the evidence and generate the fact check report in Markdown format. Base your verdict, summary, and background strictly on the verified EVIDENCE FOUND with inline citations [1], [2]. Do not adopt unverified user assertions as facts.")
+            append("Analyze the evidence and generate the fact check report in Markdown format. Under '## দাবি:', reproduce \"$effectiveClaim\" verbatim without alterations. Base your verdict, summary, and background strictly on the verified EVIDENCE FOUND with inline citations [1], [2]. Do not adopt unverified user assertions as facts.")
         }
 
         val llmReq = LlmRequest(
@@ -194,10 +193,11 @@ class FactCheckEngine(private val context: Context) {
         }
 
         val finalMarkdown = markdownBuilder.toString()
+        val enforcedMarkdown = enforceVerbatimClaim(finalMarkdown, effectiveClaim)
         
         // Extraction of Verdict strictly locked to 3 official verdicts: true, false, misleading
         var verdictStr = "misleading" // Safe default
-        val upperMd = finalMarkdown.uppercase()
+        val upperMd = enforcedMarkdown.uppercase()
         if (upperMd.contains("**TRUE**") || upperMd.contains("**সত্য**")) {
             verdictStr = "true"
         } else if (upperMd.contains("**FALSE**") || upperMd.contains("**অসত্য**")) {
@@ -206,7 +206,7 @@ class FactCheckEngine(private val context: Context) {
             verdictStr = "misleading"
         }
 
-        val extractedSummary = finalMarkdown.substringAfter("## সারাংশ:")
+        val extractedSummary = enforcedMarkdown.substringAfter("## সারাংশ:")
             .substringBefore("# বিস্তারিত ব্যাখ্যা")
             .substringBefore("## দাবির উৎস ও প্রসঙ্গ")
             .trim()
@@ -225,7 +225,7 @@ class FactCheckEngine(private val context: Context) {
             reasoningEn = "",
             sourcesJson = serializeCitationsAsSources(citations),
             contradictingSourcesJson = "[]",
-            markdownReport = finalMarkdown
+            markdownReport = enforcedMarkdown
         )
 
         send(FactCheckProgress.Success(report))
@@ -233,6 +233,26 @@ class FactCheckEngine(private val context: Context) {
     }.flowOn(Dispatchers.IO).catch { e ->
         PipelineTelemetry.error(pipelineType, PipelineStage.STREAM, "FactCheck flow failed", e)
         emit(FactCheckProgress.Error(getFriendlyErrorMessage(e)))
+    }
+
+    private fun sanitizeConciseClaim(raw: String): String {
+        var clean = raw.trim()
+        clean = clean.replace(Regex("^(ভাই|ভাইয়া|আপু|বলেন তো|বলবেন কি|ফেসবুকে দেখলাম|শুনলাম|জানতে চাই)[,:\\s]+", RegexOption.IGNORE_CASE), "")
+        clean = clean.replace(Regex("[,\\s]*(এটা কি সত্যি|এটা কি সত্য|সত্য নাকি মিথ্যা|জানাবেন কি|বলবেন কি)\\??$", RegexOption.IGNORE_CASE), "")
+        return clean.trim().ifBlank { raw.trim() }
+    }
+
+    private fun enforceVerbatimClaim(markdown: String, expectedClaim: String): String {
+        if (expectedClaim.isBlank()) return markdown
+        val claimHeadingRegex = Regex("(?i)(##\\s*(?:দাবি|claim)\\s*[:：]?\\s*\\n+)([\\s\\S]*?)(?=\\n+##\\s*(?:রায়|verdict))")
+        return if (claimHeadingRegex.containsMatchIn(markdown)) {
+            claimHeadingRegex.replace(markdown) { matchResult ->
+                val prefix = matchResult.groupValues[1]
+                "$prefix$expectedClaim"
+            }
+        } else {
+            markdown
+        }
     }
 
     // Wrap the stream to emit a single Success for legacy UI compat if needed

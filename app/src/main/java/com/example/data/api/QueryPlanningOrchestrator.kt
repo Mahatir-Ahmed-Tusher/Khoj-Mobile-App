@@ -26,9 +26,9 @@ class QueryPlanningOrchestrator(
             return@withContext getHeuristicPlan(cleanRaw, config.isFactCheck)
         }
 
-        // Single Source of Truth: If input > 140 characters and not from image, prune/extract the core claim first
-        val effectiveQuery = if (!config.isFromImage && cleanRaw.length > 140) {
-            PipelineTelemetry.log(pipelineType, PipelineStage.PLANNER, "Input length (${cleanRaw.length}) > 140. Pruning via ClaimExtractor...")
+        // Single Source of Truth: If input > 250 characters and not from image, prune/extract the core claim first
+        val effectiveQuery = if (!config.isFromImage && cleanRaw.length > 250) {
+            PipelineTelemetry.log(pipelineType, PipelineStage.PLANNER, "Input length (${cleanRaw.length}) > 250. Pruning via ClaimExtractor...")
             try {
                 ClaimExtractor.extractClaim(cleanRaw)
             } catch (e: Exception) {

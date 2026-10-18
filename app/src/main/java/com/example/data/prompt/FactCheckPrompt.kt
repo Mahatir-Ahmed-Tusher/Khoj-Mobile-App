@@ -34,6 +34,10 @@ object FactCheckPrompt {
                - When a claim is about an individual (e.g., a student, researcher, athlete, private citizen, professional), NEVER make speculative assumptions about their identity based on popular celebrity namesakes.
                - Do NOT assume a person is a famous actor, singer, or politician simply because they share a common Bengali name (e.g., Azizul Hakim, Shakib, Rakib).
                - If the claim involves a student or professional from a specific institution (e.g., polytechnic institute, college, university), verify the claim strictly within the context of that person and institution. Do NOT add irrelevant remarks about unrelated celebrities who happen to share the same name.
+            6. VERBATIM CLAIM INTEGRITY:
+               - Under '## দাবি:', you MUST state the exact assertion provided in 'FACT CHECK CLAIM TO VERIFY' without altering its meaning, scope, or extremity.
+               - NEVER soften, moderate, or align the claim with verified facts (e.g., if the user claim is "ধুমপান করলেই যক্ষা হয়", you must NEVER rewrite it as "ধুমপান যক্ষার ঝুঁকি বাড়ায়").
+               - If the claim is extreme, unverified, or false, keep the claim exactly as claimed and assign the verdict **অসত্য** (FALSE) or **বিভ্রান্তিকর** (MISLEADING). Correct scientific or contextual facts belong strictly in '## সারাংশ:' and '## কেন এটি [রায়]?', NEVER inside '## দাবি:'.
             
             ${SharedCitationPrompt.INLINE_CITATION_RULES}
             
@@ -48,7 +52,7 @@ object FactCheckPrompt {
             ### ফ্যাক্ট-চেক রিপোর্ট
             
             ## দাবি:
-            [যাচাইকৃত মূল দাবিটি সুনির্দিষ্ট তথ্য, প্রতিষ্ঠান/ব্যক্তি ও সংখ্যা অক্ষুণ্ণ রেখে ১-২ বাক্যে স্পষ্ট বিবৃতি হিসেবে লিখুন। কোনো প্রশ্নবোধক বাক্য বা দীর্ঘ প্যারাগ্রাফ লেখা সম্পূর্ণ নিষিদ্ধ।]
+            [এখানে "FACT CHECK CLAIM TO VERIFY"-এ প্রদত্ত যাচাইকৃত মূল দাবিটি হুবহু (verbatim) অপরিবর্তিত রাখুন। কোনো অবস্থাতেই প্রাপ্ত এভিডেন্স বা বাস্তব তথ্যের সাথে মিলিয়ে দাবিটিকে পরিবর্তন, নরম, যৌক্তিক বা পুনর্লিখন করা সম্পূর্ণ নিষিদ্ধ। মূল দাবি চরম বা অসত্য হলেও সেটিই হুবহু রাখুন।]
             
             ## রায়:
             **সত্য** / **অসত্য** / **বিভ্রান্তিকর**

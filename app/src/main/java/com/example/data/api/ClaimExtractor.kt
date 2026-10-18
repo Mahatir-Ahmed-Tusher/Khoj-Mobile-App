@@ -23,7 +23,7 @@ object ClaimExtractor {
 
     /**
      * Extracts a clean, 1-2 sentence fact-check claim preserving core entities and metrics.
-     * If the input is already a concise single declarative assertion (<= 120 chars, 1 sentence, no linebreaks),
+     * If the input is already a concise assertion (<= 250 chars, <= 2 sentences, no paragraph breaks),
      * returns it as-is without API overhead.
      */
     suspend fun extractClaim(rawText: String): String = withContext(Dispatchers.IO) {
@@ -31,7 +31,8 @@ object ClaimExtractor {
         val sentences = trimmed.split(Regex("[।\n!?]")).map { it.trim() }.filter { it.isNotBlank() }
         val hasQuestions = trimmed.contains("?") || trimmed.contains("কী") || trimmed.contains("কি ") || trimmed.contains("নাকি")
 
-        if (trimmed.length <= 120 && sentences.size <= 1 && !trimmed.contains("\n") && !hasQuestions) {
+        val isLargeInput = trimmed.length > 250 || sentences.size >= 3 || trimmed.contains("\n\n")
+        if (!isLargeInput && !hasQuestions) {
             return@withContext trimmed
         }
 
@@ -66,7 +67,7 @@ object ClaimExtractor {
             }
         }
 
-        // Tier 3: Deterministic Safe Fallback (Take lead paragraph or first 140 chars)
+        // Tier 3: Deterministic Safe Fallback (Take lead paragraph or first 250 chars)
         Log.w(TAG, "All LLM extractors failed. Using deterministic lead fallback.")
         return@withContext getDeterministicLeadFallback(trimmed)
     }
@@ -101,7 +102,11 @@ STRICT PRINCIPLES (NO EXCEPTIONS):
    - Retain strictly the core disputable allegation: the key subject/entity, the claimed event, and any critical metric (e.g., casualty count, exact percentage, test finding).
    - Strip all secondary administrative details, preventative advice, advisory quotes, future plans, and background commentary.
 
-3. FORMAT & LENGTH:
+3. PRESERVE DISPUTED EXTREMITY (দাবির চরমতা অক্ষুণ্ণ রাখা):
+   - Retain the exact degree of certainty, extremity, or exaggeration present in the source allegation (e.g., if the text claims "ধুমপান করলেই যক্ষা হয়", do NOT soften or align it with medical reality to say "ধুমপান যক্ষার ঝুঁকি বাড়ায়").
+   - Distill what is ALLEGED by the poster/author, without pre-correcting or altering the dispute.
+
+4. FORMAT & LENGTH:
    - Output strictly 1 short sentence (maximum 25-30 words).
    - Output in the primary language of the source text (Bengali for Bengali input, English for English input).
    - Output ONLY the distilled claim text. Do NOT add labels (e.g., 'দাবি:', 'Claim:'), prefixes, markdown, or quotes."""
@@ -192,10 +197,10 @@ STRICT PRINCIPLES (NO EXCEPTIONS):
 
     private fun getDeterministicLeadFallback(text: String): String {
         val firstSentence = text.split(Regex("[।\n.!?]")).firstOrNull { it.isNotBlank() }?.trim()
-        return if (!firstSentence.isNullOrBlank() && firstSentence.length <= 140) {
+        return if (!firstSentence.isNullOrBlank() && firstSentence.length <= 250) {
             firstSentence
         } else {
-            text.take(140).trim()
+            text.take(250).trim()
         }
     }
 }

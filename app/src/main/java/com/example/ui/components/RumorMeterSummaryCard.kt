@@ -38,6 +38,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
+import com.example.R
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -140,20 +142,12 @@ fun RumorMeterSummaryCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(22.dp)
-                        .clip(CircleShape)
-                        .background(SlatePrimary.copy(alpha = 0.15f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.TrendingUp,
-                        contentDescription = null,
-                        tint = SlatePrimary,
-                        modifier = Modifier.size(14.dp)
-                    )
-                }
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_rumour_meter),
+                    contentDescription = null,
+                    tint = if (isDark) Color(0xFFF1F5F9) else Color(0xFF1E293B),
+                    modifier = Modifier.size(20.dp)
+                )
 
                 Text(
                     text = getString("rumor_meter_title", isBn),
@@ -211,7 +205,7 @@ fun RumorMeterSummaryCard(
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 Text(
-                    text = getString("see_all", isBn),
+                    text = if (isBn) "বিস্তারিত" else "More",
                     style = MaterialTheme.typography.labelMedium.copy(
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
@@ -233,26 +227,18 @@ fun RumorMeterSummaryCard(
         }
 
         // ── Horizontally Stretched Main Card ─────────────────────────────────
+        // Dark theme: solid Color(0xFF0D0D0D) with border Color(0xFF333333)
+        // Light theme: pure white #FFFFFF
         val cardBackground = if (isDark) {
-            Brush.linearGradient(
-                colors = listOf(
-                    Color(0xFF0B1626),
-                    Color(0xFF070F1C)
-                )
-            )
+            Color(0xFF0D0D0D)
         } else {
-            Brush.linearGradient(
-                colors = listOf(
-                    Color(0xFFF0FDF4),
-                    Color(0xFFF8FAFC)
-                )
-            )
+            Color(0xFFFFFFFF)
         }
 
         val cardBorderColor = if (isDark) {
-            Color(0xFF17384E).copy(alpha = 0.85f)
+            Color(0xFF333333)
         } else {
-            Color(0xFFCBD5E1).copy(alpha = 0.9f)
+            Color(0xFFE2E8F0).copy(alpha = 0.8f)
         }
 
         Surface(
@@ -263,12 +249,12 @@ fun RumorMeterSummaryCard(
                 .border(1.dp, cardBorderColor, RoundedCornerShape(18.dp))
                 .clickable { onClick() },
             shape = RoundedCornerShape(18.dp),
-            color = Color.Transparent
+            color = cardBackground,
+            tonalElevation = 0.dp
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(cardBackground)
                     .padding(horizontal = 14.dp, vertical = 14.dp)
             ) {
                 Row(
@@ -492,7 +478,7 @@ fun SpeedometerGaugeArc(
         val arcSize = Size(radius * 2, radius * 2)
 
         // 1. Draw subtle background track
-        val trackColor = if (isDark) Color(0xFF1E293B) else Color(0xFFE2E8F0)
+        val trackColor = if (isDark) Color(0xFF333333) else Color(0xFFE2E8F0)
         drawArc(
             color = trackColor,
             startAngle = startAngle,
@@ -592,7 +578,7 @@ fun SpeedometerGaugeArc(
             center = Offset(centerX, centerY)
         )
         drawCircle(
-            color = if (isDark) Color(0xFF0B1626) else Color.White,
+            color = if (isDark) Color(0xFF0D0D0D) else Color.White,
             radius = 2.dp.toPx(),
             center = Offset(centerX, centerY)
         )

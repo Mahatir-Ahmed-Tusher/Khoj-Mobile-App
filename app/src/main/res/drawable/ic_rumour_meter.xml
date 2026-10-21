@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp"
+    android:height="20dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <group android:translateY="4">
+        <!-- Four gauge segments -->
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="9"
+            android:pathData="M10,40 A22,22 0 0,1 15.78,25.14" />
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="9"
+            android:strokeAlpha="0.85"
+            android:pathData="M17.14,23.78 A22,22 0 0,1 31.04,18.02" />
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="9"
+            android:strokeAlpha="0.7"
+            android:pathData="M32.96,18.02 A22,22 0 0,1 46.86,23.78" />
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="9"
+            android:strokeAlpha="0.55"
+            android:pathData="M48.22,25.14 A22,22 0 0,1 54,40" />
+
+        <!-- Needle with hub -->
+        <path
+            android:fillColor="#FF000000"
+            android:fillType="evenOdd"
+            android:pathData="M34.95,37.93 L22.25,26.07 L29.05,42.07 A4,4 0 1,0 34.95,37.93 Z M30.5,40 a1.5,1.5 0 1,0 3,0 a1.5,1.5 0 1,0 -3,0 Z" />
+    </group>
+</vector>

@@ -1172,7 +1172,7 @@ fun HeroGaugeCard(
             }
 
             Text(
-                text = "$statusSubtitle • ${if (isBn) "দৈনিক গতিবেগ" else "Daily Velocity"}: ${BengaliNumberUtils.formatNumber(velocity, isBn, decimals = 1)} ${getString("rumor_meter_per_day", isBn)}",
+                text = "$statusSubtitle • ${if (isBn) "দৈনিক গতিবেগ (গত ৭ দিন)" else "Daily Velocity (last 7 days)"}: ${BengaliNumberUtils.formatNumber(velocity, isBn, decimals = 1)} ${getString("rumor_meter_per_day", isBn)}",
                 style = MaterialTheme.typography.bodySmall.copy(
                     fontSize = 12.sp,
                     platformStyle = @Suppress("DEPRECATION") PlatformTextStyle(includeFontPadding = true),

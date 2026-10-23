@@ -104,10 +104,16 @@ fun ManualFactChecksSection(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = if (isBn) "সাম্প্রতিক ফ্যাক্টচেক" else "Recent Fact-Checks",
+                text = if (isBn) "খোঁজ এডিটোরিয়াল ফ্যাক্টচেক" else "Khoj Editorial Fact-Checks",
                 style = MaterialTheme.typography.titleMedium.copy(
                     fontWeight = FontWeight.ExtraBold,
-                    fontSize = 16.sp
+                    fontSize = 16.sp,
+                    platformStyle = @Suppress("DEPRECATION") PlatformTextStyle(includeFontPadding = true),
+                    lineHeightStyle = LineHeightStyle(
+                        alignment = LineHeightStyle.Alignment.Center,
+                        trim = LineHeightStyle.Trim.None
+                    ),
+                    lineHeight = 22.sp
                 ),
                 color = MaterialTheme.colorScheme.onBackground
             )

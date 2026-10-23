@@ -1302,6 +1302,7 @@ fun HomeScreen(
     val searchFocusRequester = remember { FocusRequester() }
     var isDeepSearchEnabled by rememberSaveable { mutableStateOf(false) }
     var isWebSearchEnabled by rememberSaveable { mutableStateOf(false) }
+    var isAiTextDetectionEnabled by rememberSaveable { mutableStateOf(false) }
     var showDeepSearchDrawer by remember { mutableStateOf(false) }
     var showLargeTextActionModal by remember { mutableStateOf(false) }
     var pendingLargeTextQuery by remember { mutableStateOf("") }
@@ -1325,7 +1326,9 @@ fun HomeScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
 
     val executeFactCheck: (String) -> Unit = { query ->
-        if (isDeepSearchEnabled) {
+        if (isAiTextDetectionEnabled) {
+            onNavigateToBanglaAiTextDetector(query)
+        } else if (isDeepSearchEnabled) {
             onNavigateToDeepSearch(query)
         } else if (isWebSearchEnabled) {
             onNavigateToWebSearch(query)
@@ -1341,7 +1344,7 @@ fun HomeScreen(
         if (trimmed.isNotBlank()) {
             keyboardController?.hide()
             val wordCount = trimmed.split(Regex("\\s+")).count { it.isNotBlank() }
-            if (wordCount > 140) {
+            if (wordCount > 140 && !isAiTextDetectionEnabled) {
                 pendingLargeTextQuery = trimmed
                 showLargeTextActionModal = true
             } else {
@@ -1744,22 +1747,25 @@ fun HomeScreen(
                                 )
                             }
 
-                            // Persistent Active Search Mode Badge (Always shows active mode: Factcheck by default, Deep, or Web)
+                            // Persistent Active Search Mode Badge (Always shows active mode: Factcheck by default, AI Text, Deep, or Web)
                             val activeLabel = when {
+                                isAiTextDetectionEnabled -> if (isBn) "লেখা যাচাই" else "AI Text"
                                 isDeepSearchEnabled -> if (isBn) "রিসার্চ" else "Deep"
                                 isWebSearchEnabled -> if (isBn) "সার্চ" else "Search"
                                 else -> if (isBn) "ফ্যাক্টচেক" else "Factcheck"
                             }
 
                             val activeIcon = when {
+                                isAiTextDetectionEnabled -> Icons.Outlined.Description
                                 isDeepSearchEnabled -> Icons.Default.AutoAwesome
                                 isWebSearchEnabled -> Icons.Default.TravelExplore
                                 else -> Icons.Default.VerifiedUser
                             }
 
                             val activeColor = when {
+                                isAiTextDetectionEnabled -> Color(0xFFF59E0B)
                                 isDeepSearchEnabled -> com.example.ui.theme.SlatePrimary
-                                isWebSearchEnabled -> Color(0xFF0EA5E9)
+                                isWebSearchEnabled -> Color(0xFF0284C7)
                                 else -> Color(0xFF10B981) // Emerald Green for Factcheck / Verified
                             }
 
@@ -1771,9 +1777,9 @@ fun HomeScreen(
                                 modifier = Modifier.height(26.dp)
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                    modifier = Modifier.padding(start = 7.dp, end = 6.dp, top = 2.dp, bottom = 2.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally)
+                                    horizontalArrangement = Arrangement.spacedBy(3.5.dp, Alignment.CenterHorizontally)
                                 ) {
                                     Icon(
                                         imageVector = activeIcon,
@@ -1781,14 +1787,27 @@ fun HomeScreen(
                                         tint = activeColor,
                                         modifier = Modifier.size(13.dp)
                                     )
+                                    @Suppress("DEPRECATION")
                                     Text(
                                         text = activeLabel,
-                                        style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = fontToUse,
+                                        style = TextStyle(
                                             fontWeight = FontWeight.Bold,
-                                            fontSize = 11.sp
+                                            fontSize = 11.sp,
+                                            platformStyle = PlatformTextStyle(includeFontPadding = true),
+                                            lineHeightStyle = LineHeightStyle(
+                                                alignment = LineHeightStyle.Alignment.Center,
+                                                trim = LineHeightStyle.Trim.None
+                                            )
                                         ),
                                         color = activeColor,
                                         maxLines = 1
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Default.ExpandMore,
+                                        contentDescription = "Dropdown options",
+                                        tint = activeColor.copy(alpha = 0.85f),
+                                        modifier = Modifier.size(14.dp)
                                     )
                                 }
                             }
@@ -2061,18 +2080,46 @@ fun HomeScreen(
         }
 
         if (showDeepSearchDrawer) {
+            val isFactCheckEnabled = !isDeepSearchEnabled && !isWebSearchEnabled && !isAiTextDetectionEnabled
             DeepSearchOptionsDrawer(
-                isDeepSearchEnabled = isDeepSearchEnabled,
-                onDeepSearchToggled = { enabled ->
-                    android.util.Log.d("DeepSearchFlow", "DeepSearch toggled: $enabled")
-                    isDeepSearchEnabled = enabled
+                isFactCheckEnabled = isFactCheckEnabled,
+                onFactCheckToggled = {
+                    isWebSearchEnabled = false
+                    isDeepSearchEnabled = false
+                    isAiTextDetectionEnabled = false
                 },
                 isWebSearchEnabled = isWebSearchEnabled,
                 onWebSearchToggled = { enabled ->
-                    android.util.Log.d("DeepSearchFlow", "WebSearch toggled: $enabled")
-                    isWebSearchEnabled = enabled
+                    if (enabled) {
+                        isWebSearchEnabled = true
+                        isDeepSearchEnabled = false
+                        isAiTextDetectionEnabled = false
+                    } else {
+                        isWebSearchEnabled = false
+                    }
+                },
+                isDeepSearchEnabled = isDeepSearchEnabled,
+                onDeepSearchToggled = { enabled ->
+                    if (enabled) {
+                        isDeepSearchEnabled = true
+                        isWebSearchEnabled = false
+                        isAiTextDetectionEnabled = false
+                    } else {
+                        isDeepSearchEnabled = false
+                    }
+                },
+                isAiTextDetectionEnabled = isAiTextDetectionEnabled,
+                onAiTextDetectionToggled = { enabled ->
+                    if (enabled) {
+                        isAiTextDetectionEnabled = true
+                        isWebSearchEnabled = false
+                        isDeepSearchEnabled = false
+                    } else {
+                        isAiTextDetectionEnabled = false
+                    }
                 },
                 isBn = isBn,
+                fontToUse = fontToUse,
                 onDismiss = { showDeepSearchDrawer = false }
             )
         }

@@ -353,19 +353,38 @@ fun RumorMeterSummaryCard(
 
                         // Daily Velocity Row
                         Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                            Text(
-                                text = getString("rumor_meter_velocity_label", isBn),
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Normal,
-                                    platformStyle = @Suppress("DEPRECATION") PlatformTextStyle(includeFontPadding = true),
-                                    lineHeightStyle = LineHeightStyle(
-                                        alignment = LineHeightStyle.Alignment.Center,
-                                        trim = LineHeightStyle.Trim.None
-                                    )
-                                ),
-                                color = if (isDark) Color.White.copy(alpha = 0.70f) else Color(0xFF475569)
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = getString("rumor_meter_velocity_label", isBn),
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        platformStyle = @Suppress("DEPRECATION") PlatformTextStyle(includeFontPadding = true),
+                                        lineHeightStyle = LineHeightStyle(
+                                            alignment = LineHeightStyle.Alignment.Center,
+                                            trim = LineHeightStyle.Trim.None
+                                        )
+                                    ),
+                                    color = if (isDark) Color.White.copy(alpha = 0.70f) else Color(0xFF475569)
+                                )
+
+                                Text(
+                                    text = getString("rumor_meter_velocity_period", isBn),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        platformStyle = @Suppress("DEPRECATION") PlatformTextStyle(includeFontPadding = true),
+                                        lineHeightStyle = LineHeightStyle(
+                                            alignment = LineHeightStyle.Alignment.Center,
+                                            trim = LineHeightStyle.Trim.None
+                                        )
+                                    ),
+                                    color = if (isDark) Color(0xFF2DD4BF).copy(alpha = 0.90f) else Color(0xFF0F766E).copy(alpha = 0.85f)
+                                )
+                            }
 
                             Row(verticalAlignment = Alignment.Bottom) {
                                 Text(
